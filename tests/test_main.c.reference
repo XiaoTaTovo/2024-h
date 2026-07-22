@@ -1,0 +1,497 @@
+#include <assert.h>
+#include <stdio.h>
+
+#include "app/car_app.h"
+#include "app/h2024_task.h"
+#include "core/line_estimator.h"
+#include "core/odometry.h"
+#include "core/safety_supervisor.h"
+#include "core/scheduler.h"
+#include "core/yaw_estimator.h"
+#include "drivers/button.h"
+#include "drivers/buzzer.h"
+#include "drivers/gray_array.h"
+#include "drivers/motor_board.h"
+#include "firmware.h"
+
+#define TEST_MOTOR_TX_HISTORY (64U)
+
+typedef struct {
+    uint8_t data[MOTOR_BOARD_MAX_FRAME_SIZE];
+    uint8_t length;
+    uint8_t frames[TEST_MOTOR_TX_HISTORY][MOTOR_BOARD_MAX_FRAME_SIZE];
+    uint8_t lengths[TEST_MOTOR_TX_HISTORY];
+    uint32_t send_count;
+} TestMotorTx;
+
+static bool TestMotorSend(const uint8_t *data, uint8_t length, void *context)
+{
+    TestMotorTx *tx = (TestMotorTx *)context;
+    assert(length <= sizeof(tx->data));
+    assert(tx->send_count < TEST_MOTOR_TX_HISTORY);
+    for (uint8_t i = 0U; i < length; i++) {
+        tx->data[i] = data[i];
+        tx->frames[tx->send_count][i] = data[i];
+    }
+    tx->length = length;
+    tx->lengths[tx->send_count] = length;
+    tx->send_count++;
+    return true;
+}
+
+static void AssertMotorFrame(const uint8_t *actual,
+                             uint8_t actual_length,
+                             const uint8_t *expected,
+                             uint8_t expected_length)
+{
+    assert(actual_length == expected_length);
+    for (uint8_t i = 0U; i < expected_length; i++) {
+        assert(actual[i] == expected[i]);
+    }
+}
+
+static int16_t TestReadS16(const uint8_t *data)
+{
+    return (int16_t)(((uint16_t)data[0] << 8U) | data[1]);
+}
+
+typedef struct {
+    uint8_t selected_channel;
+    uint16_t values[GRAY_ARRAY_CHANNELS];
+} TestGrayPort;
+
+static bool TestGraySelect(uint8_t channel, void *context)
+{
+    TestGrayPort *port = (TestGrayPort *)context;
+    port->selected_channel = channel;
+    return channel < GRAY_ARRAY_CHANNELS;
+}
+
+static bool TestGrayRead(uint16_t *value, void *context)
+{
+    TestGrayPort *port = (TestGrayPort *)context;
+    *value = port->values[port->selected_channel];
+    return true;
+}
+
+static void TestDelayUs(uint32_t delay_us, void *context)
+{
+    (void)delay_us;
+    (void)context;
+}
+
+typedef struct {
+    bool level;
+    bool buzzer_on;
+    uint32_t buzzer_changes;
+} TestIo;
+
+static bool TestButtonRead(void *context)
+{
+    return ((TestIo *)context)->level;
+}
+
+static void TestBuzzerSet(bool enabled, void *context)
+{
+    TestIo *io = (TestIo *)context;
+    io->buzzer_on = enabled;
+    io->buzzer_changes++;
+}
+
+typedef struct {
+    bool active;
+    bool address_received;
+    uint8_t address;
+} TestIcmBus;
+
+static void TestIcmSelect(bool active, void *context)
+{
+    TestIcmBus *bus = (TestIcmBus *)context;
+    bus->active = active;
+    bus->address_received = false;
+}
+
+static uint8_t TestIcmTransfer(uint8_t value, void *context)
+{
+    TestIcmBus *bus = (TestIcmBus *)context;
+
+    assert(bus->active);
+    if (!bus->address_received) {
+        bus->address = value;
+        bus->address_received = true;
+        return 0U;
+    }
+    if (bus->address == (uint8_t)(0x75U | 0x80U)) {
+        return 0x47U;
+    }
+    return 0U;
+}
+
+static void TestDelayMs(uint32_t delay_ms, void *context)
+{
+    (void)delay_ms;
+    (void)context;
+}
+
+static void TestMotorBoard(void)
+{
+    static const uint8_t enable_expected[8] = {
+        0x0A, 0x06, 0x00, 0x08, 0x00, 0x01, 0xC8, 0xB3
+    };
+    static const uint8_t zero_expected[17] = {
+        0x0A, 0x10, 0x00, 0x00, 0x00, 0x04, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xFD, 0x7D
+    };
+    TestMotorTx tx = {0};
+    MotorBoard board;
+    MotorBoardConfig config = {
+        TestMotorSend, &tx,
+        MOTOR_BOARD_CHANNEL_B, MOTOR_BOARD_CHANNEL_D,
+        false, true, 10U
+    };
+    uint8_t encoder_frame[13] = {
+        0x0A, 0x03, 0x08,
+        0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0xFF, 0xFC,
+        0x00, 0x00
+    };
+    CarEncoderSample sample;
+    uint8_t feedback_frame[21] = {
+        0x0A, 0x03, 0x10,
+        0x00, 0x01, 0x00, 0x02, 0x00, 0x03, 0xFF, 0xFC,
+        0x00, 0x05, 0x00, 0x06, 0x00, 0x07, 0xFF, 0xF8,
+        0x00, 0x00
+    };
+    MotorBoardPid pid[MOTOR_BOARD_CHANNEL_COUNT];
+    int16_t left_speed;
+    int16_t right_speed;
+    uint32_t speed_timestamp;
+    uint16_t crc;
+
+    MotorBoard_Init(&board, &config);
+    assert(MotorBoard_SetClosedLoop(&board, true));
+    AssertMotorFrame(tx.data, tx.length, enable_expected,
+                     sizeof(enable_expected));
+
+    assert(MotorBoard_SetWheelSpeeds(&board, 20, 20));
+    assert(tx.length == 17U);
+    assert(tx.data[9] == 0x00U && tx.data[10] == 0x14U);
+    assert(tx.data[13] == 0xFFU && tx.data[14] == 0xECU);
+
+    assert(MotorBoard_Stop(&board));
+    AssertMotorFrame(tx.data, tx.length, zero_expected,
+                     sizeof(zero_expected));
+
+    for (uint8_t channel = 0U; channel < MOTOR_BOARD_CHANNEL_COUNT; channel++) {
+        pid[channel] = (MotorBoardPid){40.0f, 4.9f, 0.0f};
+    }
+    assert(MotorBoard_SetAllPid(&board, pid));
+    assert(tx.length == 33U);
+    assert(tx.data[2] == 0x00U && tx.data[3] == 0x15U);
+    assert(tx.data[4] == 0x00U && tx.data[5] == 0x0CU);
+    assert(tx.data[6] == 0x18U);
+    for (uint8_t channel = 0U; channel < MOTOR_BOARD_CHANNEL_COUNT; channel++) {
+        uint8_t offset = (uint8_t)(7U + channel * 6U);
+        assert(tx.data[offset] == 0x9CU && tx.data[offset + 1U] == 0x40U);
+        assert(tx.data[offset + 2U] == 0x13U &&
+               tx.data[offset + 3U] == 0x24U);
+        assert(tx.data[offset + 4U] == 0x00U &&
+               tx.data[offset + 5U] == 0x00U);
+    }
+    assert(tx.data[31] == 0xBDU && tx.data[32] == 0x88U);
+
+    crc = MotorBoard_Crc16(encoder_frame, 11U);
+    encoder_frame[11] = (uint8_t)crc;
+    encoder_frame[12] = (uint8_t)(crc >> 8);
+    for (uint8_t i = 0U; i < sizeof(encoder_frame); i++) {
+        MotorBoard_OnRxByte(&board, encoder_frame[i], 100U);
+    }
+    assert(MotorBoard_GetEncoderSample(&board, &sample));
+    assert(sample.left_count == 2);
+    assert(sample.right_count == 4);
+    assert(sample.timestamp_ms == 100U);
+
+    crc = MotorBoard_Crc16(feedback_frame, 19U);
+    feedback_frame[19] = (uint8_t)crc;
+    feedback_frame[20] = (uint8_t)(crc >> 8);
+    for (uint8_t i = 0U; i < sizeof(feedback_frame); i++) {
+        MotorBoard_OnRxByte(&board, feedback_frame[i], 130U);
+    }
+    assert(MotorBoard_GetWheelSpeeds(&board, &left_speed, &right_speed,
+                                     &speed_timestamp));
+    assert(left_speed == 6);
+    assert(right_speed == 8);
+    assert(speed_timestamp == 130U);
+}
+
+static void TestOdometryWrap(void)
+{
+    CarConfig config = CarConfig_MakeDefault();
+    CarOdometry odometry;
+    CarEncoderSample sample = {32760, 32760, 0U, true};
+
+    config.wheel_diameter_mm = 318.3099f;
+    config.encoder_counts_per_wheel_rev = 1000.0f;
+    CarOdometry_Init(&odometry);
+    assert(CarOdometry_Update(&odometry, &config, &sample) == CAR_OK);
+    sample.left_count = -32766;
+    sample.right_count = -32766;
+    sample.timestamp_ms = 10U;
+    assert(CarOdometry_Update(&odometry, &config, &sample) == CAR_OK);
+    assert(odometry.center_distance_mm > 9.9f);
+    assert(odometry.center_distance_mm < 10.1f);
+}
+
+static void TestSchedulerAndYaw(void)
+{
+    CarPeriodicTask task;
+    CarYawEstimator yaw;
+    CarImuSample sample;
+
+    CarPeriodicTask_Init(&task, 10U, 0U);
+    assert(!CarPeriodicTask_Due(&task, 9U));
+    assert(CarPeriodicTask_Due(&task, 10U));
+    assert(CarPeriodicTask_Due(&task, 35U));
+    assert(task.missed_count == 1U);
+
+    CarYawEstimator_Init(&yaw, 2U, 50U);
+    assert(!CarYawEstimator_Update(&yaw, 10.0f, 0U));
+    assert(CarYawEstimator_Update(&yaw, 10.0f, 5U));
+    assert(CarYawEstimator_Update(&yaw, 110.0f, 15U));
+    assert(CarYawEstimator_GetSample(&yaw, &sample));
+    assert(sample.yaw_deg > 0.99f && sample.yaw_deg < 1.01f);
+}
+
+static void TestGrayButtonAndBuzzer(void)
+{
+    TestGrayPort gray_port = {0};
+    GrayArrayPort port = {
+        TestGraySelect, TestGrayRead, TestDelayUs, &gray_port, 10U, 2U
+    };
+    GrayArray gray;
+    CarGraySample sample;
+    uint16_t black[8];
+    uint16_t white[8];
+    TestIo io = {true, false, 0U};
+    Button button;
+    Buzzer buzzer;
+
+    for (uint8_t i = 0U; i < 8U; i++) {
+        black[i] = 100U;
+        white[i] = 1000U;
+        gray_port.values[i] = (i == 3U) ? 100U : 1000U;
+    }
+    GrayArray_Init(&gray, &port);
+    assert(GrayArray_SetCalibration(&gray, black, white));
+    assert(GrayArray_Read(&gray, 10U));
+    assert(GrayArray_GetLatest(&gray, &sample));
+    assert(sample.normalized[3] == 1000U);
+    assert(sample.normalized[2] == 0U);
+
+    Button_Init(&button, TestButtonRead, &io, true, 5U);
+    Button_Update(&button, 0U);
+    io.level = false;
+    Button_Update(&button, 1U);
+    Button_Update(&button, 6U);
+    assert(Button_TakePressedEvent(&button));
+    assert(!Button_TakePressedEvent(&button));
+
+    Buzzer_Init(&buzzer, TestBuzzerSet, &io);
+    Buzzer_PlayCue(&buzzer, CAR_CUE_CHECKPOINT, 0U);
+    assert(io.buzzer_on);
+    Buzzer_Update(&buzzer, 80U);
+    assert(!io.buzzer_on);
+}
+
+static void TestFirmwareChain(void)
+{
+    static const uint8_t enable_expected[8] = {
+        0x0A, 0x06, 0x00, 0x08, 0x00, 0x01, 0xC8, 0xB3
+    };
+    static const uint8_t zero_expected[17] = {
+        0x0A, 0x10, 0x00, 0x00, 0x00, 0x04, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xFD, 0x7D
+    };
+    TestMotorTx motor_tx = {0};
+    TestGrayPort gray_port = {0};
+    TestIcmBus icm_bus = {0};
+    TestIo io = {true, false, 0U};
+    CarFirmwareConfig config = {0};
+    CarFirmware firmware;
+    uint32_t buzzer_changes_before_fault;
+    uint32_t stop_send_count;
+    uint8_t feedback_frame[21] = {
+        0x0A, 0x03, 0x10,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0
+    };
+    uint16_t crc;
+
+    config.car = CarConfig_MakeDefault();
+    config.mode = H2024_MODE_ITEM_1;
+    config.motor = (MotorBoardConfig){
+        TestMotorSend, &motor_tx,
+        MOTOR_BOARD_CHANNEL_B, MOTOR_BOARD_CHANNEL_D,
+        false, true, 10U
+    };
+    config.imu = (Icm42688Port){
+        TestIcmTransfer, TestIcmSelect, TestDelayMs, &icm_bus
+    };
+    config.gray = (GrayArrayPort){
+        TestGraySelect, TestGrayRead, TestDelayUs, &gray_port, 1U, 1U
+    };
+    config.button_read = TestButtonRead;
+    config.button_context = &io;
+    config.buzzer_set = TestBuzzerSet;
+    config.buzzer_context = &io;
+    config.motor_units_per_mm_s = 1.0f;
+    config.yaw_axis = CAR_IMU_AXIS_Z;
+    config.yaw_sign = 1;
+    config.imu_calibration_samples = 1U;
+    config.imu_max_step_ms = 20U;
+    config.button_debounce_ms = 2U;
+    config.button_active_low = true;
+    config.gray_calibration_valid = true;
+    config.motor_command_spacing_ms = 50U;
+    config.set_encoder_polarity_on_arm = true;
+    config.set_speed_pid_on_arm = true;
+    for (uint8_t channel = 0U; channel < MOTOR_BOARD_CHANNEL_COUNT; channel++) {
+        config.encoder_polarity[channel] = true;
+        config.speed_pid[channel] = (MotorBoardPid){40.0f, 4.9f, 0.0f};
+    }
+    for (uint8_t i = 0U; i < 8U; i++) {
+        config.gray_black[i] = 100U;
+        config.gray_white[i] = 1000U;
+        gray_port.values[i] = 1000U;
+    }
+
+    assert(CarFirmware_Init(&firmware, &config, 0U) == CAR_OK);
+    assert(motor_tx.send_count == 1U);
+    AssertMotorFrame(motor_tx.frames[0], motor_tx.lengths[0], zero_expected,
+                     sizeof(zero_expected));
+
+    for (uint32_t now = 0U; now <= 350U; now++) {
+        CarFirmware_Tick(&firmware, now);
+    }
+    assert(motor_tx.send_count == 8U);
+    for (uint8_t channel = 0U; channel < MOTOR_BOARD_CHANNEL_COUNT; channel++) {
+        const uint8_t *frame = motor_tx.frames[channel + 1U];
+        uint16_t frame_crc;
+
+        assert(motor_tx.lengths[channel + 1U] == 8U);
+        assert(frame[0] == 0x0AU && frame[1] == 0x06U);
+        assert(frame[2] == 0x00U && frame[3] == (uint8_t)(0x09U + channel));
+        assert(frame[4] == 0x00U && frame[5] == 0x01U);
+        frame_crc = MotorBoard_Crc16(frame, 6U);
+        assert(frame[6] == (uint8_t)frame_crc);
+        assert(frame[7] == (uint8_t)(frame_crc >> 8U));
+    }
+    assert(motor_tx.lengths[5] == 33U);
+    assert(motor_tx.frames[5][1] == 0x10U);
+    assert(motor_tx.frames[5][2] == 0x00U &&
+           motor_tx.frames[5][3] == 0x15U);
+    AssertMotorFrame(motor_tx.frames[6], motor_tx.lengths[6],
+                     enable_expected, sizeof(enable_expected));
+    AssertMotorFrame(motor_tx.frames[7], motor_tx.lengths[7], zero_expected,
+                     sizeof(zero_expected));
+    assert(firmware.motor_armed);
+    assert(firmware.motor.closed_loop_enabled);
+
+    crc = MotorBoard_Crc16(feedback_frame, 19U);
+    feedback_frame[19] = (uint8_t)crc;
+    feedback_frame[20] = (uint8_t)(crc >> 8);
+    for (uint8_t i = 0U; i < sizeof(feedback_frame); i++) {
+        CarFirmware_OnMotorRxByte(&firmware, feedback_frame[i], 351U);
+    }
+
+    io.level = false;
+    for (uint32_t now = 351U; now <= 400U; now++) {
+        CarFirmware_Tick(&firmware, now);
+    }
+    assert(firmware.app.executor.running);
+    assert(firmware.output.motor.enable);
+    assert(firmware.motor_armed);
+    assert(motor_tx.send_count > 8U);
+    assert(TestReadS16(&motor_tx.data[9]) > 0);
+    assert(TestReadS16(&motor_tx.data[13]) < 0);
+
+    buzzer_changes_before_fault = io.buzzer_changes;
+    CarFirmware_ForceStop(&firmware, CAR_FAULT_MOTOR_IO);
+    AssertMotorFrame(motor_tx.data, motor_tx.length, zero_expected,
+                     sizeof(zero_expected));
+    assert(firmware.motor.closed_loop_enabled);
+    stop_send_count = motor_tx.send_count;
+    for (uint32_t now = 401U; now <= 460U; now++) {
+        CarFirmware_Tick(&firmware, now);
+    }
+    assert(motor_tx.send_count > stop_send_count);
+    AssertMotorFrame(motor_tx.data, motor_tx.length, zero_expected,
+                     sizeof(zero_expected));
+    assert(io.buzzer_changes == buzzer_changes_before_fault + 1U);
+}
+
+static void TestLineEstimator(void)
+{
+    CarConfig config = CarConfig_MakeDefault();
+    CarGraySample sample = {{0}, 10U, true};
+    CarLineEstimate estimate;
+
+    sample.normalized[3] = 1000U;
+    sample.normalized[4] = 1000U;
+    assert(CarLineEstimator_Update(&config, &sample, &estimate) == CAR_OK);
+    assert(estimate.valid);
+    assert(estimate.position == 0);
+
+    sample = (CarGraySample){{0}, 20U, true};
+    sample.normalized[0] = 1000U;
+    assert(CarLineEstimator_Update(&config, &sample, &estimate) == CAR_OK);
+    assert(estimate.position < 0);
+}
+
+static void TestRoutes(void)
+{
+    CarConfig config = CarConfig_MakeDefault();
+    CarRoute route;
+
+    assert(H2024_BuildRoute(H2024_MODE_ITEM_1, &config, &route) == CAR_OK);
+    assert(route.count == 4U);
+    assert(H2024_BuildRoute(H2024_MODE_ITEM_2, &config, &route) == CAR_OK);
+    assert(route.count == 10U);
+    assert(H2024_BuildRoute(H2024_MODE_ITEM_3, &config, &route) == CAR_OK);
+    assert(route.count == 13U);
+    assert(H2024_BuildRoute(H2024_MODE_ITEM_4, &config, &route) == CAR_OK);
+    assert(route.count <= CAR_ROUTE_MAX_SEGMENTS);
+}
+
+static void TestSafety(void)
+{
+    CarConfig config = CarConfig_MakeDefault();
+    CarInputSnapshot input = {0};
+    uint32_t faults;
+
+    input.encoder.valid = true;
+    input.imu.valid = true;
+    input.encoder.timestamp_ms = 100U;
+    input.imu.timestamp_ms = 100U;
+    faults = CarSafety_Evaluate(&config, 120U, &input, true, false);
+    assert(faults == CAR_FAULT_NONE);
+    faults = CarSafety_Evaluate(&config, 500U, &input, true, false);
+    assert((faults & CAR_FAULT_ENCODER_STALE) != 0U);
+    assert((faults & CAR_FAULT_IMU_STALE) != 0U);
+}
+
+int main(void)
+{
+    TestMotorBoard();
+    TestOdometryWrap();
+    TestSchedulerAndYaw();
+    TestGrayButtonAndBuzzer();
+    TestLineEstimator();
+    TestRoutes();
+    TestSafety();
+    TestFirmwareChain();
+    puts("2024 H firmware tests passed");
+    return 0;
+}
