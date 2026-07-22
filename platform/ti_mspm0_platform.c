@@ -139,19 +139,19 @@ static bool TiGray_Select(uint8_t channel, void *context)
         return false;
     }
     if ((channel & 0x01U) != 0U) {
-        DL_GPIO_setPins(GPIO_GRAY_PORT, GPIO_GRAY_AD0_PIN);
+        DL_GPIO_setPins(GPIO_GRAY_AD0_PORT, GPIO_GRAY_AD0_PIN);
     } else {
-        DL_GPIO_clearPins(GPIO_GRAY_PORT, GPIO_GRAY_AD0_PIN);
+        DL_GPIO_clearPins(GPIO_GRAY_AD0_PORT, GPIO_GRAY_AD0_PIN);
     }
     if ((channel & 0x02U) != 0U) {
-        DL_GPIO_setPins(GPIO_GRAY_PORT, GPIO_GRAY_AD1_PIN);
+        DL_GPIO_setPins(GPIO_GRAY_AD1_PORT, GPIO_GRAY_AD1_PIN);
     } else {
-        DL_GPIO_clearPins(GPIO_GRAY_PORT, GPIO_GRAY_AD1_PIN);
+        DL_GPIO_clearPins(GPIO_GRAY_AD1_PORT, GPIO_GRAY_AD1_PIN);
     }
     if ((channel & 0x04U) != 0U) {
-        DL_GPIO_setPins(GPIO_GRAY_PORT, GPIO_GRAY_AD2_PIN);
+        DL_GPIO_setPins(GPIO_GRAY_AD2_PORT, GPIO_GRAY_AD2_PIN);
     } else {
-        DL_GPIO_clearPins(GPIO_GRAY_PORT, GPIO_GRAY_AD2_PIN);
+        DL_GPIO_clearPins(GPIO_GRAY_AD2_PORT, GPIO_GRAY_AD2_PIN);
     }
     return true;
 }
@@ -221,12 +221,26 @@ void TiMspm0Platform_Init(void)
     g_motor_rx_head = 0U;
     g_motor_rx_tail = 0U;
     g_diagnostics = (TiMspm0PlatformDiagnostics){0};
+    DL_GPIO_clearPins(GPIO_GRAY_EN_PORT, GPIO_GRAY_EN_PIN);
     DL_GPIO_setPins(GPIO_IMU_PORT, GPIO_IMU_CS_PIN);
     DL_GPIO_clearPins(GPIO_BUZZER_PORT, GPIO_BUZZER_BUZZER_PIN);
     while (!DL_UART_Main_isRXFIFOEmpty(UART_MOTOR_INST)) {
         (void)DL_UART_Main_receiveData(UART_MOTOR_INST);
     }
+    DL_ADC12_disableConversions(ADC_GRAY_INST);
+    DL_ADC12_initSingleSample(
+        ADC_GRAY_INST,
+        DL_ADC12_REPEAT_MODE_ENABLED,
+        DL_ADC12_SAMPLING_SOURCE_AUTO,
+        DL_ADC12_TRIG_SRC_SOFTWARE,
+        DL_ADC12_SAMP_CONV_RES_12_BIT,
+        DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
+    DL_ADC12_setSampleTime0(ADC_GRAY_INST, 8U);
+    DL_ADC12_clearInterruptStatus(
+        ADC_GRAY_INST, DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED);
+    DL_ADC12_enableConversions(ADC_GRAY_INST);
     NVIC_ClearPendingIRQ(UART_MOTOR_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(ADC_GRAY_INST_INT_IRQN);
     NVIC_EnableIRQ(UART_MOTOR_INST_INT_IRQN);
     NVIC_EnableIRQ(ADC_GRAY_INST_INT_IRQN);
 }

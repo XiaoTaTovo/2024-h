@@ -1,0 +1,57 @@
+# empty_mspm0g3507_nortos_ticlang 项目记忆
+
+最后更新：2026-07-23
+
+## 使用约定
+
+- 本文件记录已确认事实、当前问题、修改结果和下一步工作。
+- 后续修改代码、引脚配置或获得上板结果时同步更新。
+- 未经上板验证的结论标记为“待验证”。
+
+## 现有功能
+
+- 蓝牙开环 TB6612 电机测试。
+- 双路增量编码器采集。
+- VOFA+ 遥测。
+- H2024 分层固件、路线执行、里程计、航向估计和安全监控。
+- 灰度阵列驱动，支持 8 路原始值、黑白校准和归一化。
+- ICM42688、按键、蜂鸣器和电机板适配。
+
+## 2026-07-23 灰度 ADC 调试合并
+
+- 新增 `PROJECT_MODE_GRAY_ADC_DEBUG`，当前设为默认模式。
+- 合并 `OLED.c/.h`，使用 SSD1306 128x64，优先地址 `0x3C`，备用 `0x3D`。
+- OLED 使用 I2C0：PA1=SCL、PA0=SDA、100 kHz。
+- 灰度引脚：AD0=PA24、AD1=PA25、AD2=PA26、OUT=PA27、EN=PB24、ERR=PB25。
+- EN 在平台初始化时明确拉低，使能灰度板。
+- ADC 使用 ADC0 MEM0、12 位、软件触发、自动采样、重复单通道模式。
+- 每路切换后等待 10 us，每路采样 4 次取平均。
+- OLED 显示 8 路原始 ADC、EN、ERR、ADC 状态和递增帧号。
+- 调试模式不启动 TB6612，电机保持关闭。
+- 原蓝牙和 H2024 模式均保留，通过 `project_mode.h` 切换。
+
+## 合并中发现的原有问题
+
+- 目标工程原先声明本机不存在的 TI Arm Clang 5.1.1，导致旧 Debug Makefile 中
+  编译器命令为空并报 `CreateProcess` 错误；`.cproject` 已改为本机的 4.0.4 LTS。
+  CCS 下次载入工程后应重新生成 Debug Makefile（待 CCS 内验证）。
+- 平台原先使用不存在的 `GPIO_GRAY_PORT`，已改成 SysConfig 实际生成的
+  `GPIO_GRAY_AD0_PORT`、`GPIO_GRAY_AD1_PORT`、`GPIO_GRAY_AD2_PORT` 等宏。
+- 目标 SysConfig 原先没有显式初始化 ADC 采样模式；平台现已显式设置重复单通道模式。
+- 拓展板文档中的 OLED PB2/PB3 与当前 UART_BLUETOOTH 引脚冲突，因此调试模式采用
+  已在 `exercise_2024` 上验证过的 PA0/PA1 接线。
+
+## 验证状态
+
+- SysConfig 1.27.1 使用 MSPM0 SDK 2.9.0.1 完整校验通过，无引脚冲突。
+- 全部固件源文件已使用 TI Arm Clang 4.0.4 LTS 编译并链接成功，无警告。
+- 主机单元测试以 `-Wall -Wextra -Werror` 编译并运行通过，输出
+  `2024 H firmware tests passed`。
+- 上板运行待验证。
+
+## 下一步
+
+1. 烧录 `Debug/empty_mspm0g3507_nortos_ticlang.out`。
+2. 确认 OLED 最后一行 `F:n` 持续增加。
+3. 分别遮挡 8 路探头，确认对应 ADC 数字会变化且通道不串扰。
+4. 记录各路黑线和白底 ADC 值，填入正式固件校准数组。
