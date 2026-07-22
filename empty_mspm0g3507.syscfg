@@ -25,6 +25,8 @@ const GPIO6         = GPIO.addInstance();
 const GPIO7         = GPIO.addInstance();
 const GPIO8         = GPIO.addInstance();
 const GPIO9         = GPIO.addInstance();
+const I2C           = scripting.addModule("/ti/driverlib/I2C", {}, false);
+const I2C1          = I2C.addInstance();
 const PWM           = scripting.addModule("/ti/driverlib/PWM", {}, false);
 const PWM1          = PWM.addInstance();
 const SPI           = scripting.addModule("/ti/driverlib/SPI", {}, false);
@@ -116,6 +118,19 @@ GPIO9.$name                         = "GPIO_BUZZER";
 GPIO9.associatedPins[0].$name       = "BUZZER";
 GPIO9.associatedPins[0].pin.$assign = "PB5";
 
+I2C1.$name                             = "I2C_OLED";
+I2C1.peripheral.$assign                = "I2C0";
+I2C1.peripheral.sdaPin.$assign         = "PA0";
+I2C1.peripheral.sclPin.$assign         = "PA1";
+I2C1.sdaPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric6";
+I2C1.sdaPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+I2C1.sdaPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+I2C1.sdaPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+I2C1.sclPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric7";
+I2C1.sclPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+I2C1.sclPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+I2C1.sclPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+
 PWM1.$name                              = "PWM_TB1";
 PWM1.timerCount                         = 1600;
 PWM1.ccIndex                            = [1,2];
@@ -157,8 +172,6 @@ SYSCTL.clockTreeEn           = true;
 
 UART1.$name                            = "UART_DEBUG";
 UART1.targetBaudRate                   = 115200;
-UART1.enabledDMATXTriggers             = "DL_UART_DMA_INTERRUPT_TX";
-UART1.enabledDMARXTriggers             = "DL_UART_DMA_INTERRUPT_RX";
 UART1.peripheral.rxPin.$assign         = "PA11";
 UART1.peripheral.txPin.$assign         = "PA10";
 UART1.txPinConfig.direction            = scripting.forceWrite("OUTPUT");
@@ -170,8 +183,6 @@ UART1.rxPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 UART1.rxPinConfig.onlyInternalResistor = scripting.forceWrite(false);
 UART1.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 UART1.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric3";
-UART1.DMA_CHANNEL_TX.$name             = "DMA_CH0";
-UART1.DMA_CHANNEL_RX.$name             = "DMA_CH1";
 
 UART2.$name                            = "UART_BLUETOOTH";
 UART2.targetBaudRate                   = 115200;
@@ -213,9 +224,7 @@ ProjectConfig.deviceSpin = "MSPM0G3507";
  * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
  * re-solve from scratch.
  */
-Board.peripheral.$suggestSolution                = "DEBUGSS";
-Board.peripheral.swclkPin.$suggestSolution       = "PA20";
-Board.peripheral.swdioPin.$suggestSolution       = "PA19";
-UART1.peripheral.$suggestSolution                = "UART0";
-UART1.DMA_CHANNEL_TX.peripheral.$suggestSolution = "DMA_CH1";
-UART1.DMA_CHANNEL_RX.peripheral.$suggestSolution = "DMA_CH0";
+Board.peripheral.$suggestSolution          = "DEBUGSS";
+Board.peripheral.swclkPin.$suggestSolution = "PA20";
+Board.peripheral.swdioPin.$suggestSolution = "PA19";
+UART1.peripheral.$suggestSolution          = "UART0";
