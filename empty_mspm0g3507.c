@@ -1,21 +1,48 @@
+/*
+ * Copyright (c) 2023, Texas Instruments Incorporated
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * *  Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * *  Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * *  Neither the name of Texas Instruments Incorporated nor the names of
+ *    its contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include "ti_msp_dl_config.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
-#include "project_mode.h"
-#include "platform/ti_mspm0_platform.h"
-
-#if PROJECT_MODE == PROJECT_MODE_BLUETOOTH_TUNING
-
 #include "bluetooth_control.h"
-#include "encoder.h"
 #include "tb6612.h"
 #include "vofa_telemetry.h"
 
 #define TELEMETRY_PERIOD_MS (100U)
 
-static void DelayMs(uint32_t ms)
+static volatile uint32_t gUptimeMs;
+
+static void Delay_ms(uint32_t ms)
 {
     while (ms > 0U) {
         delay_cycles(CPUCLK_FREQ / 1000U);
@@ -23,20 +50,33 @@ static void DelayMs(uint32_t ms)
     }
 }
 
-static void RunBluetoothTuning(void)
+int main(void)
 {
+    uint32_t lastTelemetryMs = 0;
+
+    SYSCFG_DL_init();
     TB6612_Init();
+    BluetoothControl_Init();
 
-    DelayMs(2000);
+    NVIC_ClearPendingIRQ(UART_BLUETOOTH_INST_INT_IRQN);
+    NVIC_EnableIRQ(UART_BLUETOOTH_INST_INT_IRQN);
+    DL_SYSTICK_config(CPUCLK_FREQ / 1000U);
 
-    TB6612_SetMotors(0, 20);  // 只测试左轮逻辑正方向
-    DelayMs(1000);
+    Delay_ms(2000);              // 上电后等待 2 秒
+    TB6612_SetMotors(0, 20);     // 只让左轮以正方向 20% 转动
+    Delay_ms(1000);              // 转动 1 秒
+    TB6612_Stop(); 
 
-    TB6612_Stop();
 
     while (1) {
+        
         __WFI();
     }
+}
+
+void SysTick_Handler(void)
+{
+    gUptimeMs++;
 }
 
 void UART_BLUETOOTH_INST_IRQHandler(void)
@@ -45,75 +85,10 @@ void UART_BLUETOOTH_INST_IRQHandler(void)
         case DL_UART_MAIN_IIDX_RX:
             while (!DL_UART_Main_isRXFIFOEmpty(UART_BLUETOOTH_INST)) {
                 BluetoothControl_PushRxFromIsr(
-                    (uint8_t) DL_UART_Main_receiveData(
-                        UART_BLUETOOTH_INST));
+                    (uint8_t) DL_UART_Main_receiveData(UART_BLUETOOTH_INST));
             }
             break;
         default:
             break;
     }
-}
-
-#else
-
-#include "firmware.h"
-
-static CarFirmware gFirmware;
-
-static H2024Mode GetH2024Mode(void)
-{
-#if PROJECT_MODE == PROJECT_MODE_H2024_ITEM_1
-    return H2024_MODE_ITEM_1;
-#elif PROJECT_MODE == PROJECT_MODE_H2024_ITEM_2
-    return H2024_MODE_ITEM_2;
-#elif PROJECT_MODE == PROJECT_MODE_H2024_ITEM_3
-    return H2024_MODE_ITEM_3;
-#else
-    return H2024_MODE_ITEM_4;
-#endif
-}
-
-static void RunH2024Firmware(void)
-{
-    CarFirmwareConfig config;
-    CarStatus status;
-
-    TiMspm0Platform_Init();
-    status = TiMspm0Platform_BuildConfig(&config, GetH2024Mode());
-    if (status == CAR_OK) {
-        status = CarFirmware_Init(
-            &gFirmware, &config, TiMspm0Platform_Millis());
-    }
-    if (status != CAR_OK) {
-        while (1) {
-            __WFI();
-        }
-    }
-
-    while (1) {
-        TiMspm0Platform_PollMotorRx(&gFirmware);
-        CarFirmware_Tick(&gFirmware, TiMspm0Platform_Millis());
-        __WFI();
-    }
-}
-
-#endif
-
-int main(void)
-{
-    SYSCFG_DL_init();
-    DL_SYSTICK_config(CPUCLK_FREQ / 1000U);
-
-#if PROJECT_MODE == PROJECT_MODE_BLUETOOTH_TUNING
-    RunBluetoothTuning();
-#else
-    RunH2024Firmware();
-#endif
-
-    return 0;
-}
-
-void SysTick_Handler(void)
-{
-    TiMspm0Platform_OnSysTick();
 }

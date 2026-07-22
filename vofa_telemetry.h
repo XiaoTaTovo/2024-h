@@ -5,8 +5,6 @@
 
 #include "bluetooth_control.h"
 
-void VofaTelemetry_SendBanner(void);
-void VofaTelemetry_Send(
-    const BluetoothControlStatus *status, uint32_t uptimeMs);
+void VofaTelemetry_Send(const BluetoothControlStatus *status, uint32_t uptimeMs);
 
 #endif

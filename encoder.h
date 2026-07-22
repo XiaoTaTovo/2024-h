@@ -3,25 +3,13 @@
 
 #include <stdint.h>
 
-/* Set a sign to -1 if forward wheel motion produces negative counts. */
+/* Set either value to -1 if the measured forward direction is reversed. */
 #ifndef ENC_LEFT_SIGN
 #define ENC_LEFT_SIGN (+1)
 #endif
 
 #ifndef ENC_RIGHT_SIGN
 #define ENC_RIGHT_SIGN (+1)
-#endif
-
-/*
- * Leave these at zero until one output-wheel revolution has been measured.
- * They can also be configured at runtime with the Bluetooth PPR command.
- */
-#ifndef ENC_LEFT_COUNTS_PER_REV
-#define ENC_LEFT_COUNTS_PER_REV (0U)
-#endif
-
-#ifndef ENC_RIGHT_COUNTS_PER_REV
-#define ENC_RIGHT_COUNTS_PER_REV (0U)
 #endif
 
 #if ((ENC_LEFT_SIGN != 1) && (ENC_LEFT_SIGN != -1))
@@ -41,7 +29,7 @@ void Encoder_ResetCounts(void);
 int32_t Encoder_GetLeftCount(void);
 int32_t Encoder_GetRightCount(void);
 
-/* Return cumulative_count - previous_sample without clearing total counts. */
+/* Returns cumulative_count - previous_sample without clearing cumulative count. */
 int32_t Encoder_GetLeftDelta(void);
 int32_t Encoder_GetRightDelta(void);
 
