@@ -181,7 +181,7 @@ static bool TiGray_ReadAdc(uint16_t *value, void *context)
 static bool TiButton_Read(void *context)
 {
     (void)context;
-    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_START_PIN) != 0U);
+    return TiMspm0Platform_ReadStartButtonLevel();
 }
 
 static void TiBuzzer_Set(bool enabled, void *context)
@@ -248,6 +248,11 @@ void TiMspm0Platform_Init(void)
 uint32_t TiMspm0Platform_Millis(void)
 {
     return g_millis;
+}
+
+bool TiMspm0Platform_ReadStartButtonLevel(void)
+{
+    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_START_PIN) != 0U);
 }
 
 void TiMspm0Platform_PollMotorRx(CarFirmware *firmware)

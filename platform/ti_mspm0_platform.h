@@ -30,6 +30,7 @@ typedef struct {
 void TiMspm0Platform_Init(void);
 void TiMspm0Platform_OnSysTick(void);
 uint32_t TiMspm0Platform_Millis(void);
+bool TiMspm0Platform_ReadStartButtonLevel(void);
 void TiMspm0Platform_PollMotorRx(CarFirmware *firmware);
 void TiMspm0Platform_GetDiagnostics(TiMspm0PlatformDiagnostics *diagnostics);
 CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
