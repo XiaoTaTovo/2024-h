@@ -34,11 +34,21 @@ typedef struct {
     bool calibrated;
 } GrayArray;
 
+typedef struct {
+    uint8_t black_mask;
+    uint8_t white_mask;
+    uint8_t unknown_mask;
+} GrayArrayClassification;
+
 void GrayArray_Init(GrayArray *array, const GrayArrayPort *port);
 bool GrayArray_SetCalibration(GrayArray *array,
                               const uint16_t black[GRAY_ARRAY_CHANNELS],
                               const uint16_t white[GRAY_ARRAY_CHANNELS]);
 bool GrayArray_Read(GrayArray *array, uint32_t now_ms);
 bool GrayArray_GetLatest(const GrayArray *array, CarGraySample *sample);
+bool GrayArray_ClassifyLatest(const GrayArray *array,
+                              uint16_t white_threshold,
+                              uint16_t black_threshold,
+                              GrayArrayClassification *classification);
 
 #endif

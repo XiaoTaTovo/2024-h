@@ -181,7 +181,7 @@ static bool TiGray_ReadAdc(uint16_t *value, void *context)
 static bool TiButton_Read(void *context)
 {
     (void)context;
-    return TiMspm0Platform_ReadStartButtonLevel();
+    return TiMspm0Platform_ReadKey1Level();
 }
 
 static void TiBuzzer_Set(bool enabled, void *context)
@@ -221,6 +221,11 @@ void TiMspm0Platform_Init(void)
     g_motor_rx_head = 0U;
     g_motor_rx_tail = 0U;
     g_diagnostics = (TiMspm0PlatformDiagnostics){0};
+    /* Keep the motor driver electrically disabled during every startup path. */
+    DL_TimerA_stopCounter(PWM_TB1_INST);
+    DL_GPIO_clearPins(STBY_PORT, STBY_PIN_STBY_PIN);
+    DL_GPIO_clearPins(A_PORT, A_PIN_AIN1_PIN | A_PIN_AIN2_PIN);
+    DL_GPIO_clearPins(B_PORT, B_PIN_BIN1_PIN | B_PIN_BIN2_PIN);
     DL_GPIO_clearPins(GPIO_GRAY_EN_PORT, GPIO_GRAY_EN_PIN);
     DL_GPIO_setPins(GPIO_IMU_PORT, GPIO_IMU_CS_PIN);
     DL_GPIO_clearPins(GPIO_BUZZER_PORT, GPIO_BUZZER_BUZZER_PIN);
@@ -250,9 +255,19 @@ uint32_t TiMspm0Platform_Millis(void)
     return g_millis;
 }
 
-bool TiMspm0Platform_ReadStartButtonLevel(void)
+bool TiMspm0Platform_ReadKey1Level(void)
 {
-    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_START_PIN) != 0U);
+    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_KEY1_PIN) != 0U);
+}
+
+bool TiMspm0Platform_ReadKey2Level(void)
+{
+    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_KEY2_PIN) != 0U);
+}
+
+bool TiMspm0Platform_ReadKey3Level(void)
+{
+    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_KEY3_PIN) != 0U);
 }
 
 void TiMspm0Platform_PollMotorRx(CarFirmware *firmware)
