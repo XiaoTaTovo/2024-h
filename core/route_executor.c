@@ -30,6 +30,9 @@ static void CarRoute_Advance(CarRouteExecutor *executor,
     executor->segment_start_ms = now_ms;
     executor->segment_start_distance_mm = odometry->center_distance_mm;
     executor->segment_start_yaw_deg = yaw_deg;
+    executor->line_integral = 0.0f;
+    executor->line_previous_error = 0.0f;
+    executor->line_previous_ms = now_ms;
     if (executor->index >= executor->route->count) {
         executor->running = false;
         executor->finished = true;
@@ -59,6 +62,9 @@ CarStatus CarRouteExecutor_Start(CarRouteExecutor *executor,
     executor->segment_start_ms = now_ms;
     executor->segment_start_distance_mm = odometry->center_distance_mm;
     executor->segment_start_yaw_deg = yaw_deg;
+    executor->line_integral = 0.0f;
+    executor->line_previous_error = 0.0f;
+    executor->line_previous_ms = now_ms;
     executor->running = true;
     executor->finished = false;
     return CAR_OK;
@@ -128,21 +134,34 @@ CarStatus CarRouteExecutor_Update(CarRouteExecutor *executor,
 
 
         case CAR_SEGMENT_TURN:
-            progress = yaw_deg - executor->segment_start_yaw_deg;
-            if (CarRoute_Abs(progress) + config->angle_tolerance_deg >=
-                CarRoute_Abs(segment->value)) {
+        {
+            float target_yaw = executor->segment_start_yaw_deg + segment->value;
+            float turn_direction = (segment->value >= 0.0f) ? 1.0f : -1.0f;
+            float turn_error = (target_yaw - yaw_deg) * turn_direction;
+            float turn_speed;
+
+            if (turn_error <= config->angle_tolerance_deg) {
                 CarRoute_Advance(executor, now_ms, odometry, yaw_deg);
                 break;
             }
+
+            /* Proportional yaw loop with a small floor to overcome stiction. */
+            turn_speed = turn_error * config->turn_heading_kp;
+            if (turn_speed < config->turn_min_speed_mm_s) {
+                turn_speed = config->turn_min_speed_mm_s;
+            }
+            turn_speed = CarRoute_Clamp(
+                turn_speed, CarRoute_Abs(segment->speed));
             if (segment->value > 0.0f) {
                 motor->left_mm_s = 0.0f;
-                motor->right_mm_s = segment->speed;
+                motor->right_mm_s = turn_speed;
             } else {
-                motor->left_mm_s = segment->speed;
+                motor->left_mm_s = turn_speed;
                 motor->right_mm_s = 0.0f;
             }
             motor->enable = true;
             break;
+        }
         //转弯段
         case CAR_SEGMENT_ARC:
         {
@@ -171,10 +190,37 @@ CarStatus CarRouteExecutor_Update(CarRouteExecutor *executor,
                 motor->right_mm_s = segment->speed * inner_ratio;
             }
             if (segment->use_line && (line != 0) && line->valid) {
-                correction = CarRoute_Clamp((float)line->position * config->arc_line_kp,
-                                            config->max_wheel_speed_mm_s * 0.25f);
-                motor->left_mm_s -= correction;
-                motor->right_mm_s += correction;
+                float line_error = (float)line->position;
+                float dt_s = (float)(now_ms - executor->line_previous_ms) /
+                             1000.0f;
+                float derivative = 0.0f;
+
+                if ((dt_s > 0.0f) && (dt_s <= 0.25f)) {
+                    derivative = (line_error - executor->line_previous_error) /
+                                 dt_s;
+                    executor->line_integral += line_error * dt_s;
+                } else {
+                    dt_s = 0.01f;
+                }
+                if (config->arc_line_integral_limit > 0.0f) {
+                    executor->line_integral = CarRoute_Clamp(
+                        executor->line_integral,
+                        config->arc_line_integral_limit);
+                } else {
+                    executor->line_integral = 0.0f;
+                }
+                correction = line_error * config->arc_line_kp +
+                             executor->line_integral * config->arc_line_ki +
+                             derivative * config->arc_line_kd;
+                executor->line_previous_error = line_error;
+                executor->line_previous_ms = now_ms;
+                correction = CarRoute_Clamp(
+                    correction, config->max_wheel_speed_mm_s * 0.25f);
+                /* Positive line position means the line is on the right.
+                 * Increase the left wheel and slow the right wheel to steer
+                 * toward it; this matches the TB6612 forward convention. */
+                motor->left_mm_s += correction;
+                motor->right_mm_s -= correction;
             }
             motor->enable = true;
             break;

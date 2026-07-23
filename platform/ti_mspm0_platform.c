@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "platform/ti_mspm0_platform_config.h"
+#include "encoder.h"
+#include "tb6612.h"
 #include "ti_msp_dl_config.h"
 
 static volatile uint32_t g_millis;
@@ -11,6 +13,13 @@ static volatile uint8_t g_motor_rx[H2024_UART_RX_BUFFER_SIZE];
 static volatile uint8_t g_motor_rx_head;
 static volatile uint8_t g_motor_rx_tail;
 static volatile TiMspm0PlatformDiagnostics g_diagnostics;
+static TB6612MotorBoardContext g_tb6612_context;
+
+static uint32_t TiMspm0Platform_MillisAdapter(void *context)
+{
+    (void)context;
+    return TiMspm0Platform_Millis();
+}
 
 static uint8_t TiMotor_NextRxIndex(uint8_t index)
 {
@@ -139,19 +148,19 @@ static bool TiGray_Select(uint8_t channel, void *context)
         return false;
     }
     if ((channel & 0x01U) != 0U) {
-        DL_GPIO_setPins(GPIO_GRAY_PORT, GPIO_GRAY_AD0_PIN);
+        DL_GPIO_setPins(GPIO_GRAY_AD0_PORT, GPIO_GRAY_AD0_PIN);
     } else {
-        DL_GPIO_clearPins(GPIO_GRAY_PORT, GPIO_GRAY_AD0_PIN);
+        DL_GPIO_clearPins(GPIO_GRAY_AD0_PORT, GPIO_GRAY_AD0_PIN);
     }
     if ((channel & 0x02U) != 0U) {
-        DL_GPIO_setPins(GPIO_GRAY_PORT, GPIO_GRAY_AD1_PIN);
+        DL_GPIO_setPins(GPIO_GRAY_AD1_PORT, GPIO_GRAY_AD1_PIN);
     } else {
-        DL_GPIO_clearPins(GPIO_GRAY_PORT, GPIO_GRAY_AD1_PIN);
+        DL_GPIO_clearPins(GPIO_GRAY_AD1_PORT, GPIO_GRAY_AD1_PIN);
     }
     if ((channel & 0x04U) != 0U) {
-        DL_GPIO_setPins(GPIO_GRAY_PORT, GPIO_GRAY_AD2_PIN);
+        DL_GPIO_setPins(GPIO_GRAY_AD2_PORT, GPIO_GRAY_AD2_PIN);
     } else {
-        DL_GPIO_clearPins(GPIO_GRAY_PORT, GPIO_GRAY_AD2_PIN);
+        DL_GPIO_clearPins(GPIO_GRAY_AD2_PORT, GPIO_GRAY_AD2_PIN);
     }
     return true;
 }
@@ -181,7 +190,7 @@ static bool TiGray_ReadAdc(uint16_t *value, void *context)
 static bool TiButton_Read(void *context)
 {
     (void)context;
-    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_START_PIN) != 0U);
+    return TiMspm0Platform_ReadKey1Level();
 }
 
 static void TiBuzzer_Set(bool enabled, void *context)
@@ -221,12 +230,36 @@ void TiMspm0Platform_Init(void)
     g_motor_rx_head = 0U;
     g_motor_rx_tail = 0U;
     g_diagnostics = (TiMspm0PlatformDiagnostics){0};
+    /* Keep the motor driver electrically disabled during every startup path. */
+    DL_TimerA_stopCounter(PWM_TB1_INST);
+    DL_GPIO_clearPins(STBY_PORT, STBY_PIN_STBY_PIN);
+    DL_GPIO_clearPins(A_PORT, A_PIN_AIN1_PIN | A_PIN_AIN2_PIN);
+    DL_GPIO_clearPins(B_PORT, B_PIN_BIN1_PIN | B_PIN_BIN2_PIN);
+    DL_GPIO_clearPins(GPIO_GRAY_EN_PORT, GPIO_GRAY_EN_PIN);
     DL_GPIO_setPins(GPIO_IMU_PORT, GPIO_IMU_CS_PIN);
     DL_GPIO_clearPins(GPIO_BUZZER_PORT, GPIO_BUZZER_BUZZER_PIN);
+    TB6612_MotorBoardContextInit(
+        &g_tb6612_context, TiMspm0Platform_MillisAdapter, 0,
+        H2024_TB6612_SPEED_UNITS_AT_MAX_DUTY);
+    TB6612_Init();
+    Encoder_Init();
     while (!DL_UART_Main_isRXFIFOEmpty(UART_MOTOR_INST)) {
         (void)DL_UART_Main_receiveData(UART_MOTOR_INST);
     }
+    DL_ADC12_disableConversions(ADC_GRAY_INST);
+    DL_ADC12_initSingleSample(
+        ADC_GRAY_INST,
+        DL_ADC12_REPEAT_MODE_ENABLED,
+        DL_ADC12_SAMPLING_SOURCE_AUTO,
+        DL_ADC12_TRIG_SRC_SOFTWARE,
+        DL_ADC12_SAMP_CONV_RES_12_BIT,
+        DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
+    DL_ADC12_setSampleTime0(ADC_GRAY_INST, 8U);
+    DL_ADC12_clearInterruptStatus(
+        ADC_GRAY_INST, DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED);
+    DL_ADC12_enableConversions(ADC_GRAY_INST);
     NVIC_ClearPendingIRQ(UART_MOTOR_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(ADC_GRAY_INST_INT_IRQN);
     NVIC_EnableIRQ(UART_MOTOR_INST_INT_IRQN);
     NVIC_EnableIRQ(ADC_GRAY_INST_INT_IRQN);
 }
@@ -234,6 +267,21 @@ void TiMspm0Platform_Init(void)
 uint32_t TiMspm0Platform_Millis(void)
 {
     return g_millis;
+}
+
+bool TiMspm0Platform_ReadKey1Level(void)
+{
+    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_KEY1_PIN) != 0U);
+}
+
+bool TiMspm0Platform_ReadKey2Level(void)
+{
+    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_KEY2_PIN) != 0U);
+}
+
+bool TiMspm0Platform_ReadKey3Level(void)
+{
+    return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_KEY3_PIN) != 0U);
 }
 
 void TiMspm0Platform_PollMotorRx(CarFirmware *firmware)
@@ -270,13 +318,30 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
     config->car.track_width_mm = H2024_TRACK_WIDTH_MM;
     config->car.encoder_counts_per_wheel_rev =
         H2024_ENCODER_COUNTS_PER_WHEEL_REV;
+    config->car.arc_line_kp = H2024_LINE_PID_KP;
+    config->car.arc_line_ki = H2024_LINE_PID_KI;
+    config->car.arc_line_kd = H2024_LINE_PID_KD;
+    config->car.arc_line_integral_limit = H2024_LINE_PID_INTEGRAL_LIMIT;
     config->mode = mode;
 
+#if H2024_MOTOR_BACKEND_TB6612
+    config->motor = (MotorBoardConfig){0};
+    config->motor.left_channel = MOTOR_BOARD_CHANNEL_B;
+    config->motor.right_channel = MOTOR_BOARD_CHANNEL_D;
+    config->motor.left_inverted = false;
+    config->motor.right_inverted = false;
+    config->motor.direct_set_wheel_speeds =
+        TB6612_MotorBoard_SetWheelSpeeds;
+    config->motor.direct_get_encoder = TB6612_MotorBoard_GetEncoder;
+    config->motor.direct_context = &g_tb6612_context;
+#else
     config->motor = (MotorBoardConfig){
         TiMotor_Send, 0,
         MOTOR_BOARD_CHANNEL_B, MOTOR_BOARD_CHANNEL_D,
-        false, true, 5U
+        false, true, 5U,
+        0, 0, 0
     };
+#endif
     config->imu = (Icm42688Port){
         TiImu_Transfer, TiImu_Select, TiDelayMs, 0
     };
@@ -289,7 +354,9 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
     config->motor_units_per_mm_s = H2024_MOTOR_UNITS_PER_MM_S;
     config->yaw_axis = CAR_IMU_AXIS_Z;
     config->yaw_sign = H2024_IMU_YAW_SIGN;
-    config->imu_calibration_samples = 400U;
+    config->yaw_bias_dps = H2024_IMU_BIAS_DPS;
+    config->yaw_bias_fixed = H2024_IMU_USE_FIXED_BIAS != 0U;
+    config->imu_calibration_samples = H2024_IMU_CALIBRATION_SAMPLES;
     config->imu_max_step_ms = 20U;
     config->button_debounce_ms = 20U;
     config->button_active_low = true;
@@ -306,7 +373,18 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
         };
     }
 
-    /* Item 1 does not need gray. Fill measured values before item 2-4. */
-    config->gray_calibration_valid = false;
+    /* Measured full-white/full-black values for the current sensor board. */
+    {
+        static const uint16_t gray_black[GRAY_ARRAY_CHANNELS] = {
+            108U, 112U, 113U, 114U, 114U, 114U, 114U, 114U
+        };
+        static const uint16_t gray_white[GRAY_ARRAY_CHANNELS] = {
+            2415U, 1677U, 2310U, 2001U, 1693U, 1885U, 1869U, 1141U
+        };
+
+        memcpy(config->gray_black, gray_black, sizeof(gray_black));
+        memcpy(config->gray_white, gray_white, sizeof(gray_white));
+        config->gray_calibration_valid = true;
+    }
     return CAR_OK;
 }

@@ -176,6 +176,10 @@ bool MotorBoard_SetClosedLoop(MotorBoard *board, bool enable)
     if (board == 0) {
         return false;
     }
+    if (board->config.direct_set_wheel_speeds != 0) {
+        board->closed_loop_enabled = enable;
+        return true;
+    }
     sent = MotorBoard_WriteSingle(board, MOTOR_BOARD_REG_CLOSED_LOOP,
                                   enable ? 1U : 0U);
     if (sent) {
@@ -189,6 +193,8 @@ bool MotorBoard_SetWheelSpeeds(MotorBoard *board,
                                int16_t right)
 {
     int16_t speeds[MOTOR_BOARD_CHANNEL_COUNT] = {0, 0, 0, 0};
+    int16_t direct_left;
+    int16_t direct_right;
 
     if ((board == 0) ||
         ((uint8_t)board->config.left_channel >= MOTOR_BOARD_CHANNEL_COUNT) ||
@@ -196,10 +202,15 @@ bool MotorBoard_SetWheelSpeeds(MotorBoard *board,
         return false;
     }
 
-    speeds[board->config.left_channel] =
-        MotorBoard_ApplyInvert(left, board->config.left_inverted);
-    speeds[board->config.right_channel] =
-        MotorBoard_ApplyInvert(right, board->config.right_inverted);
+    direct_left = MotorBoard_ApplyInvert(left, board->config.left_inverted);
+    direct_right = MotorBoard_ApplyInvert(right, board->config.right_inverted);
+    if (board->config.direct_set_wheel_speeds != 0) {
+        return board->config.direct_set_wheel_speeds(
+            direct_left, direct_right, board->config.direct_context);
+    }
+
+    speeds[board->config.left_channel] = direct_left;
+    speeds[board->config.right_channel] = direct_right;
 
     return MotorBoard_WriteFour(board, MOTOR_BOARD_REG_SPEED, speeds);
 }//设置左右轮子速度
@@ -232,6 +243,10 @@ bool MotorBoard_SetEncoderPolarity(MotorBoard *board,
     if ((board == 0) || ((uint8_t)channel >= MOTOR_BOARD_CHANNEL_COUNT)) {
         return false;
     }
+    if (board->config.direct_set_wheel_speeds != 0) {
+        (void)inverted;
+        return true;
+    }
     return MotorBoard_WriteSingle(board,
                                   (uint16_t)(MOTOR_BOARD_REG_ENCODER_POLARITY + channel),
                                   inverted ? 1U : 0U);
@@ -246,6 +261,9 @@ bool MotorBoard_SetAllPid(
 
     if ((board == 0) || (pid == 0)) {
         return false;
+    }
+    if (board->config.direct_set_wheel_speeds != 0) {
+        return true;
     }
     for (uint8_t channel = 0U; channel < MOTOR_BOARD_CHANNEL_COUNT; channel++) {
         raw[index++] = MotorBoard_PidToRaw(pid[channel].kp);
@@ -317,8 +335,23 @@ bool MotorBoard_GetEncoderSample(const MotorBoard *board,
 {
     int16_t left;
     int16_t right;
+    uint32_t timestamp_ms;
 
-    if ((board == 0) || (sample == 0) || !board->encoder_valid) {
+    if ((board == 0) || (sample == 0)) {
+        return false;
+    }
+    if (board->config.direct_get_encoder != 0) {
+        if (!board->config.direct_get_encoder(
+                &left, &right, &timestamp_ms, board->config.direct_context)) {
+            return false;
+        }
+        sample->left_count = left;
+        sample->right_count = right;
+        sample->timestamp_ms = timestamp_ms;
+        sample->valid = true;
+        return true;
+    }
+    if (!board->encoder_valid) {
         return false;
     }
     left = board->channel_counts[board->config.left_channel];

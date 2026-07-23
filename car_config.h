@@ -17,6 +17,8 @@ typedef struct {
     float angle_tolerance_deg;
     float straight_heading_kp;
     float arc_line_kp;
+    float turn_heading_kp;
+    float turn_min_speed_mm_s;
 
     uint32_t encoder_timeout_ms;
     uint32_t imu_timeout_ms;
@@ -28,6 +30,9 @@ typedef struct {
 
     uint16_t gray_min_signal;
     uint16_t gray_min_confidence;
+    float arc_line_ki;
+    float arc_line_kd;
+    float arc_line_integral_limit;
 } CarConfig;
 
 static inline CarConfig CarConfig_MakeDefault(void)
@@ -44,6 +49,8 @@ static inline CarConfig CarConfig_MakeDefault(void)
         3.0f,
         2.0f,
         0.0f,
+        2.0f,
+        30.0f,
         150U,
         150U,
         100U,

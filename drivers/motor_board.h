@@ -26,6 +26,15 @@ typedef bool (*MotorBoardSendFn)(const uint8_t *data,
                                  uint8_t length,
                                  void *context);
 
+/* Optional direct motor backend. The serial protocol remains the default. */
+typedef bool (*MotorBoardDirectSetWheelSpeedsFn)(int16_t left,
+                                                 int16_t right,
+                                                 void *context);
+typedef bool (*MotorBoardDirectGetEncoderFn)(int16_t *left,
+                                             int16_t *right,
+                                             uint32_t *timestamp_ms,
+                                             void *context);
+
 typedef struct {
     MotorBoardSendFn send;
     void *context;
@@ -34,6 +43,9 @@ typedef struct {
     bool left_inverted;
     bool right_inverted;
     uint32_t rx_inter_byte_timeout_ms;
+    MotorBoardDirectSetWheelSpeedsFn direct_set_wheel_speeds;
+    MotorBoardDirectGetEncoderFn direct_get_encoder;
+    void *direct_context;
 } MotorBoardConfig;
 
 typedef struct {

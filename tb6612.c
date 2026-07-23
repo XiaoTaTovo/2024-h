@@ -1,5 +1,6 @@
 #include "tb6612.h"
 
+#include "encoder.h"
 #include "ti_msp_dl_config.h"
 
 static int8_t gLeftCommand;
@@ -31,6 +32,27 @@ static void set_pwm(int8_t leftPercent, int8_t rightPercent)
         percent_to_compare(leftPercent), GPIO_PWM_TB1_C1_IDX);
     DL_TimerA_setCaptureCompareValue(PWM_TB1_INST,
         percent_to_compare(rightPercent), GPIO_PWM_TB1_C2_IDX);
+}
+
+static int8_t units_to_percent(int16_t units,
+                               int16_t units_at_max_duty)
+{
+    int32_t scaled;
+    int32_t denominator = (units_at_max_duty > 0) ?
+        units_at_max_duty : 350;
+
+    scaled = (int32_t)units * (int32_t)TB6612_MAX_DUTY_PERCENT;
+    if (scaled >= 0) {
+        scaled = (scaled + denominator / 2) / denominator;
+    } else {
+        scaled = (scaled - denominator / 2) / denominator;
+    }
+    if (scaled > (int32_t)TB6612_MAX_DUTY_PERCENT) {
+        scaled = TB6612_MAX_DUTY_PERCENT;
+    } else if (scaled < -(int32_t)TB6612_MAX_DUTY_PERCENT) {
+        scaled = -(int32_t)TB6612_MAX_DUTY_PERCENT;
+    }
+    return (int8_t)scaled;
 }
 
 static void set_left_direction(int8_t percent)
@@ -114,5 +136,48 @@ int8_t TB6612_GetLeftCommand(void)
 int8_t TB6612_GetRightCommand(void)
 {
     return gRightCommand;
+}
+
+void TB6612_MotorBoardContextInit(TB6612MotorBoardContext *context,
+                                  TB6612NowFn now_ms,
+                                  void *now_context,
+                                  int16_t speed_units_at_max_duty)
+{
+    if (context == 0) {
+        return;
+    }
+    context->now_ms = now_ms;
+    context->now_context = now_context;
+    context->speed_units_at_max_duty = speed_units_at_max_duty;
+}
+
+bool TB6612_MotorBoard_SetWheelSpeeds(int16_t left,
+                                      int16_t right,
+                                      void *context)
+{
+    TB6612MotorBoardContext *adapter = (TB6612MotorBoardContext *)context;
+    int16_t scale = (adapter == 0) ? 350 :
+                    adapter->speed_units_at_max_duty;
+
+    TB6612_SetMotors(units_to_percent(left, scale),
+                     units_to_percent(right, scale));
+    return true;
+}
+
+bool TB6612_MotorBoard_GetEncoder(int16_t *left,
+                                  int16_t *right,
+                                  uint32_t *timestamp_ms,
+                                  void *context)
+{
+    TB6612MotorBoardContext *adapter = (TB6612MotorBoardContext *)context;
+
+    if ((left == 0) || (right == 0) || (timestamp_ms == 0) ||
+        (adapter == 0) || (adapter->now_ms == 0)) {
+        return false;
+    }
+    *left = (int16_t)Encoder_GetLeftCount();
+    *right = (int16_t)Encoder_GetRightCount();
+    *timestamp_ms = adapter->now_ms(adapter->now_context);
+    return true;
 }
 

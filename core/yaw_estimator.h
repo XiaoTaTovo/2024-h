@@ -14,13 +14,17 @@ typedef struct {
     uint16_t calibration_count;
     uint32_t previous_timestamp_ms;
     uint32_t max_step_ms;
+    /* Fixed-bias mode is retained for repeatable bench tests. */
+    bool fixed_bias;
     bool calibrated;
     bool timestamp_valid;
 } CarYawEstimator;
 
 void CarYawEstimator_Init(CarYawEstimator *estimator,
                           uint16_t calibration_samples,
-                          uint32_t max_step_ms);
+                          uint32_t max_step_ms,
+                          float initial_bias_dps,
+                          bool fixed_bias);
 void CarYawEstimator_ResetYaw(CarYawEstimator *estimator, float yaw_deg);
 bool CarYawEstimator_Update(CarYawEstimator *estimator,
                             float gyro_z_dps,

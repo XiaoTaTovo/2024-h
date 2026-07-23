@@ -192,19 +192,35 @@ static void CarFirmware_RunControl(CarFirmware *firmware, uint32_t now_ms)
     CarInputSnapshot input = {0};
     bool start_event = Button_TakePressedEvent(&firmware->button);
 
-    (void)MotorBoard_GetEncoderSample(&firmware->motor, &input.encoder);
+    firmware->encoder_valid_current = MotorBoard_GetEncoderSample(
+        &firmware->motor, &input.encoder);
     input.imu = firmware->imu_sample;
     input.gray = firmware->gray_sample;
     input.start_pressed = start_event;
 
+    if (start_event) {
+        firmware->button_event_count++;
+        firmware->last_button_event_ms = now_ms;
+        firmware->last_button_encoder_valid = input.encoder.valid;
+        firmware->last_button_imu_valid = input.imu.valid;
+        firmware->last_button_motor_armed = firmware->motor_armed;
+        firmware->last_arm_status = CAR_OK;
+        firmware->last_button_action = CAR_BUTTON_ACTION_NONE;
+    }
+
     if (start_event && firmware->app.executor.running) {
         input.emergency_stop = true;
+        firmware->last_button_action = CAR_BUTTON_ACTION_EMERGENCY_STOP;
     } else if (start_event && !firmware->app.armed) {
         CarYawEstimator_ResetYaw(&firmware->yaw, 0.0f);
         input.imu.yaw_deg = 0.0f;
-        if (CarApp_Arm(&firmware->app, firmware->config.mode,
-                       now_ms, &input) != CAR_OK) {
+        firmware->last_arm_status = CarApp_Arm(
+            &firmware->app, firmware->config.mode, now_ms, &input);
+        if (firmware->last_arm_status != CAR_OK) {
+            firmware->last_button_action = CAR_BUTTON_ACTION_ARM_REJECTED;
             Buzzer_PlayCue(&firmware->buzzer, CAR_CUE_FAULT, now_ms);
+        } else {
+            firmware->last_button_action = CAR_BUTTON_ACTION_ARM_OK;
         }
     }
 
@@ -241,7 +257,9 @@ CarStatus CarFirmware_Init(CarFirmware *firmware,
                 config->buzzer_context);
     CarYawEstimator_Init(&firmware->yaw,
                          config->imu_calibration_samples,
-                         config->imu_max_step_ms);
+                         config->imu_max_step_ms,
+                         config->yaw_bias_dps,
+                         config->yaw_bias_fixed);
     if (CarApp_Init(&firmware->app, &config->car) != CAR_OK) {
         return CAR_ERROR_ARG;
     }
@@ -253,7 +271,9 @@ CarStatus CarFirmware_Init(CarFirmware *firmware,
          !GrayArray_SetCalibration(&firmware->gray,
                                    config->gray_black,
                                    config->gray_white)) &&
-        (config->mode != H2024_MODE_ITEM_1)) {
+        ((config->mode == H2024_MODE_ITEM_2) ||
+         (config->mode == H2024_MODE_ITEM_3) ||
+         (config->mode == H2024_MODE_ITEM_4))) {
         firmware->hardware_faults |= CAR_FAULT_GRAY_NOT_CALIBRATED;
     }
 

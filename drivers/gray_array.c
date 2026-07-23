@@ -114,3 +114,30 @@ bool GrayArray_GetLatest(const GrayArray *array, CarGraySample *sample)
     *sample = array->latest;
     return true;
 }
+
+bool GrayArray_ClassifyLatest(const GrayArray *array,
+                              uint16_t white_threshold,
+                              uint16_t black_threshold,
+                              GrayArrayClassification *classification)
+{
+    if ((array == 0) || (classification == 0) ||
+        !array->calibrated || !array->latest.valid ||
+        (white_threshold > black_threshold)) {
+        return false;
+    }
+
+    *classification = (GrayArrayClassification){0};
+    for (uint8_t channel = 0U; channel < GRAY_ARRAY_CHANNELS; channel++) {
+        uint8_t bit = (uint8_t)(1U << channel);
+        uint16_t value = array->latest.normalized[channel];
+
+        if (value <= white_threshold) {
+            classification->white_mask |= bit;
+        } else if (value >= black_threshold) {
+            classification->black_mask |= bit;
+        } else {
+            classification->unknown_mask |= bit;
+        }
+    }
+    return true;
+}

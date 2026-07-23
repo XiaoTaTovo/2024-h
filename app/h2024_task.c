@@ -6,6 +6,7 @@
 #define H2024_DIAGONAL_MM (1280.6248f)
 #define H2024_DIAGONAL_TURN_DEG (38.6598f)
 #define H2024_LOOP_TURN_DEG (141.3402f)
+#define H2024_DEBUG_TURN_DEG (30.0f)
 
 static CarStatus H2024_Add(CarRoute *route,
                            CarSegmentType type,
@@ -128,6 +129,15 @@ CarStatus H2024_BuildRoute(H2024Mode mode,
                 if (H2024_AddItem3Loop(route, config, loop > 0U) != CAR_OK) {
                     return CAR_ERROR_CAPACITY;
                 }
+            }
+            break;
+
+        case H2024_MODE_TURN_DEBUG:
+            if (H2024_Add(route, CAR_SEGMENT_TURN, H2024_DEBUG_TURN_DEG,
+                          config->turn_wheel_speed_mm_s,
+                          config->turn_timeout_ms, false,
+                          CAR_CUE_NONE) != CAR_OK) {
+                return CAR_ERROR_CAPACITY;
             }
             break;
 

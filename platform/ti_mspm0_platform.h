@@ -14,7 +14,7 @@
  * ADC_GRAY: ADC0 MEM0, OUT PA27, 12 bit, conversion-complete interrupt
  * GPIO_GRAY: AD0 PA24, AD1 PA25, AD2 PA26
  * GPIO_IMU: CS PB0, initialized high
- * GPIO_KEYS: START PB10, input with external pull-up
+ * GPIO_KEYS: KEY1 PB23, KEY2 PB26, KEY3 PB27, inputs with pull-ups
  * GPIO_BUZZER: BUZZER PB5, initialized low
  * SYSTICK: 1 ms interrupt
  */
@@ -30,6 +30,9 @@ typedef struct {
 void TiMspm0Platform_Init(void);
 void TiMspm0Platform_OnSysTick(void);
 uint32_t TiMspm0Platform_Millis(void);
+bool TiMspm0Platform_ReadKey1Level(void);
+bool TiMspm0Platform_ReadKey2Level(void);
+bool TiMspm0Platform_ReadKey3Level(void);
 void TiMspm0Platform_PollMotorRx(CarFirmware *firmware);
 void TiMspm0Platform_GetDiagnostics(TiMspm0PlatformDiagnostics *diagnostics);
 CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,

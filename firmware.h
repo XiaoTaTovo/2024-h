@@ -30,6 +30,13 @@ typedef enum {
     CAR_MOTOR_PREP_FINAL_ZERO
 } CarMotorPrepareStep;
 
+typedef enum {
+    CAR_BUTTON_ACTION_NONE = 0,
+    CAR_BUTTON_ACTION_ARM_OK,
+    CAR_BUTTON_ACTION_ARM_REJECTED,
+    CAR_BUTTON_ACTION_EMERGENCY_STOP
+} CarButtonAction;
+
 typedef struct {
     CarConfig car;
     H2024Mode mode;
@@ -44,6 +51,8 @@ typedef struct {
     float motor_units_per_mm_s;
     CarImuAxis yaw_axis;
     int8_t yaw_sign;
+    float yaw_bias_dps;
+    bool yaw_bias_fixed;
     uint16_t imu_calibration_samples;
     uint32_t imu_max_step_ms;
     uint16_t button_debounce_ms;
@@ -83,6 +92,15 @@ typedef struct {
     CarMotorPrepareStep motor_prepare_step;
     bool motor_prepare_active;
     bool motor_armed;
+    /* Latched diagnostics make a short button event visible on the OLED. */
+    uint32_t button_event_count;
+    uint32_t last_button_event_ms;
+    CarButtonAction last_button_action;
+    CarStatus last_arm_status;
+    bool last_button_encoder_valid;
+    bool last_button_imu_valid;
+    bool last_button_motor_armed;
+    bool encoder_valid_current;
     bool initialized;
 } CarFirmware;
 

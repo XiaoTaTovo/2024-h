@@ -6,14 +6,25 @@
 #define H2024_TRACK_WIDTH_MM                 (140.0f)
 #define H2024_ENCODER_COUNTS_PER_WHEEL_REV   (1000.0f)
 #define H2024_MOTOR_UNITS_PER_MM_S           (1.0f)
+#define H2024_MOTOR_BACKEND_TB6612           (1U)
+#define H2024_TB6612_SPEED_UNITS_AT_MAX_DUTY (350)
+#define H2024_IMU_BIAS_DPS                   (-0.45f)
+#define H2024_IMU_USE_FIXED_BIAS             (0U)
+#define H2024_IMU_CALIBRATION_SAMPLES       (400U)
 #define H2024_IMU_YAW_SIGN                   (1)//控制yaw的方向，目前假设向左转yaw增大
 
-/* Motor board speed-loop PID (verified values Kp=40.0 Ki=4.9 Kd=0.0),
- * downloaded to the board during arm. Frames are spaced by this many ms. */
+/* Reserved for the retained serial motor-board backend. TB6612 task mode
+ * ignores these register/PID values and uses the direct adapter below. */
 #define H2024_MOTOR_PID_KP                   (40.0f)
 #define H2024_MOTOR_PID_KI                   (4.9f)
 #define H2024_MOTOR_PID_KD                   (0.0f)
 #define H2024_MOTOR_COMMAND_SPACING_MS       (50U)
+
+/* Start line control with P only; tune Ki/Kd after the TB6612 baseline. */
+#define H2024_LINE_PID_KP                    (0.020f)
+#define H2024_LINE_PID_KI                    (0.0f)
+#define H2024_LINE_PID_KD                    (0.0f)
+#define H2024_LINE_PID_INTEGRAL_LIMIT        (5000.0f)
 
 #define H2024_GRAY_SETTLE_US                 (10U)
 #define H2024_GRAY_SAMPLES_PER_CHANNEL       (4U)

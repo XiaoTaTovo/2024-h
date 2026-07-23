@@ -2,15 +2,19 @@
 
 void CarYawEstimator_Init(CarYawEstimator *estimator,
                           uint16_t calibration_samples,
-                          uint32_t max_step_ms)
+                          uint32_t max_step_ms,
+                          float initial_bias_dps,
+                          bool fixed_bias)
 {
     if (estimator == 0) {
         return;
     }
     *estimator = (CarYawEstimator){0};
-    estimator->calibration_target = calibration_samples;
+    estimator->bias_dps = initial_bias_dps;
+    estimator->fixed_bias = fixed_bias;
+    estimator->calibration_target = fixed_bias ? 0U : calibration_samples;
     estimator->max_step_ms = max_step_ms;
-    estimator->calibrated = calibration_samples == 0U;
+    estimator->calibrated = fixed_bias || (calibration_samples == 0U);
 }
 
 void CarYawEstimator_ResetYaw(CarYawEstimator *estimator, float yaw_deg)

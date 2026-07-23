@@ -62,7 +62,7 @@ void VofaTelemetry_SendBanner(void)
     send_text("#READY Bluetooth encoder and speed-loop debug\r\n");
     send_text("#CSV mode,motion,target_l,target_r,rpm_l,rpm_r,"
               "duty_l,duty_r,delta_l,delta_r,total_l,total_r,"
-              "ppr_l,ppr_r,kp_x1000,ki_x1000,kd_x1000,"
+              "cpr_l,cpr_r,kp_x1000,ki_x1000,kd_x1000,"
               "limit,duty_step,rx,errors,failsafe,ms\r\n");
     send_text("#Send HELP for commands\r\n");
 }

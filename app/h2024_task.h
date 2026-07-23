@@ -8,7 +8,8 @@ typedef enum {
     H2024_MODE_ITEM_1 = 1,
     H2024_MODE_ITEM_2 = 2,
     H2024_MODE_ITEM_3 = 3,
-    H2024_MODE_ITEM_4 = 4
+    H2024_MODE_ITEM_4 = 4,
+    H2024_MODE_TURN_DEBUG = 5
 } H2024Mode;
 
 CarStatus H2024_BuildRoute(H2024Mode mode,
