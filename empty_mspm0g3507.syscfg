@@ -189,8 +189,6 @@ SYSCTL.clockTreeEn           = true;
 
 UART1.$name                            = "UART_DEBUG";
 UART1.targetBaudRate                   = 115200;
-UART1.enabledDMATXTriggers             = "DL_UART_DMA_INTERRUPT_TX";
-UART1.enabledDMARXTriggers             = "DL_UART_DMA_INTERRUPT_RX";
 UART1.peripheral.rxPin.$assign         = "PA11";
 UART1.peripheral.txPin.$assign         = "PA10";
 UART1.txPinConfig.direction            = scripting.forceWrite("OUTPUT");
@@ -202,8 +200,6 @@ UART1.rxPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 UART1.rxPinConfig.onlyInternalResistor = scripting.forceWrite(false);
 UART1.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 UART1.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric3";
-UART1.DMA_CHANNEL_TX.$name             = "DMA_CH0";
-UART1.DMA_CHANNEL_RX.$name             = "DMA_CH1";
 
 UART2.$name                            = "UART_BLUETOOTH";
 UART2.targetBaudRate                   = 115200;
@@ -245,9 +241,7 @@ ProjectConfig.deviceSpin = "MSPM0G3507";
  * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
  * re-solve from scratch.
  */
-Board.peripheral.$suggestSolution                = "DEBUGSS";
-Board.peripheral.swclkPin.$suggestSolution       = "PA20";
-Board.peripheral.swdioPin.$suggestSolution       = "PA19";
-UART1.peripheral.$suggestSolution                = "UART0";
-UART1.DMA_CHANNEL_TX.peripheral.$suggestSolution = "DMA_CH1";
-UART1.DMA_CHANNEL_RX.peripheral.$suggestSolution = "DMA_CH0";
+Board.peripheral.$suggestSolution          = "DEBUGSS";
+Board.peripheral.swclkPin.$suggestSolution = "PA20";
+Board.peripheral.swdioPin.$suggestSolution = "PA19";
+UART1.peripheral.$suggestSolution          = "UART0";

@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define TB6612_PWM_PERIOD_TICKS       (1600U)
-#define TB6612_MAX_DUTY_PERCENT       (60U)
+#define TB6612_MAX_DUTY_PERCENT       (80U)//最大占空比
 
 /* Set a value to 0 if that wheel's vehicle-forward direction is reversed. */
 #define TB6612_LEFT_FORWARD_IN1_HIGH  (0)

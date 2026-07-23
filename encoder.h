@@ -5,7 +5,7 @@
 
 /* Set a sign to -1 if forward wheel motion produces negative counts. */
 #ifndef ENC_LEFT_SIGN
-#define ENC_LEFT_SIGN (+1)
+#define ENC_LEFT_SIGN (-1)
 #endif
 
 #ifndef ENC_RIGHT_SIGN

@@ -14,7 +14,8 @@
 #define BLUETOOTH_INITIAL_DUTY_PERCENT   (20U)
 #define BLUETOOTH_MIN_DUTY_PERCENT       (10U)
 #define BLUETOOTH_DUTY_STEP_PERCENT      (5U)
-#define BLUETOOTH_FAILSAFE_MS            (2000U)
+#define BLUETOOTH_DEFAULT_FAILSAFE_MS    (2000U)
+#define BLUETOOTH_MAX_FAILSAFE_MS        (600000U)
 #define SPEED_CONTROL_PERIOD_MS          (50U)
 #define SPEED_INITIAL_LIMIT_PERCENT      (35U)
 #define SPEED_MAX_TARGET_RPM             (1000)
@@ -23,6 +24,9 @@
 #define SPEED_DEFAULT_KI_MILLI           (600U)
 #define SPEED_DEFAULT_KD_MILLI           (0U)
 #define SPEED_MAX_GAIN_MILLI             (100000U)
+#define SPEED_FEEDFORWARD_STATIC_MILLI   (6000)
+#define SPEED_FEEDFORWARD_RPM_MILLI      (225U)
+#define SPEED_ERROR_DEADBAND_RPM         (2)
 
 static volatile uint8_t gRxBuffer[BLUETOOTH_RX_BUFFER_SIZE];
 static volatile uint8_t gRxHead;
@@ -39,6 +43,7 @@ static BluetoothMotion gMotion;
 static uint8_t gDutyPercent;
 static uint8_t gSpeedLimitPercent;
 static uint32_t gLastMotionCommandMs;
+static uint32_t gFailsafeTimeoutMs;
 static uint32_t gFailsafeCount;
 
 static int32_t gTargetLeftRpm;
@@ -57,6 +62,7 @@ static int64_t gRightIntegralMilli;
 static int32_t gLeftPreviousError;
 static int32_t gRightPreviousError;
 static uint32_t gLastSpeedSampleMs;
+static bool gSpeedFilterReady;
 
 static void send_text(const char *text)
 {
@@ -71,8 +77,9 @@ static void send_help(void)
     send_text("#HELP commands require CR/LF or 100 ms idle\r\n");
     send_text("#CAL | STATUS | PPR left [right]\r\n");
     send_text("#OPEN left_pct right_pct | F | B | L | R | S | + | -\r\n");
-    send_text("#SPEED left_rpm right_rpm | KEEP\r\n");
-    send_text("#PID kp ki [kd] | LIMIT percent | DUTY percent\r\n");
+    send_text("#SPEED left_rpm right_rpm | KEEP | TIMEOUT ms\r\n");
+    send_text("#PID kp ki [kd] | KP value | KI value | KD value\r\n");
+    send_text("#LIMIT percent | DUTY percent | TIMEOUT 0 disables failsafe\r\n");
     send_text("#Example: PID 0.250 0.600 0\r\n");
 }
 
@@ -312,6 +319,7 @@ static bool command_ppr(char **cursor)
 
     gLeftCountsPerRev  = (uint32_t) left;
     gRightCountsPerRev = (uint32_t) right;
+    gSpeedFilterReady  = false;
     send_text("#OK PPR\r\n");
     return true;
 }
@@ -338,6 +346,48 @@ static bool command_pid(char **cursor)
     gKdMilli = kd;
     reset_controller_state();
     send_text("#OK PID\r\n");
+    return true;
+}
+
+static bool command_gain(char **cursor, uint32_t *gain,
+    const char *name, uint32_t nowMs)
+{
+    char *valueText = next_token(cursor);
+    uint32_t value;
+
+    if ((valueText == NULL) || !parse_gain_milli(valueText, &value) ||
+        !has_no_more_tokens(cursor)) {
+        report_command_error("gain example: KP 0.250");
+        return false;
+    }
+
+    *gain = value;
+    if (gMode != BLUETOOTH_MODE_STOP) {
+        gLastMotionCommandMs = nowMs;
+    }
+    send_text("#OK ");
+    send_text(name);
+    send_text("\r\n");
+    return true;
+}
+
+static bool command_timeout(char **cursor, uint32_t nowMs)
+{
+    char *valueText = next_token(cursor);
+    int32_t value;
+
+    if ((valueText == NULL) || !parse_int32(valueText, &value) ||
+        !has_no_more_tokens(cursor) || (value < 0) ||
+        ((uint32_t) value > BLUETOOTH_MAX_FAILSAFE_MS)) {
+        report_command_error("TIMEOUT range is 0..600000 ms");
+        return false;
+    }
+
+    gFailsafeTimeoutMs = (uint32_t) value;
+    if (gMode != BLUETOOTH_MODE_STOP) {
+        gLastMotionCommandMs = nowMs;
+    }
+    send_text("#OK TIMEOUT\r\n");
     return true;
 }
 
@@ -479,6 +529,18 @@ static bool execute_command(uint32_t nowMs)
     if (strcmp(command, "PID") == 0) {
         return command_pid(&cursor);
     }
+    if (strcmp(command, "KP") == 0) {
+        return command_gain(&cursor, &gKpMilli, "KP", nowMs);
+    }
+    if (strcmp(command, "KI") == 0) {
+        return command_gain(&cursor, &gKiMilli, "KI", nowMs);
+    }
+    if (strcmp(command, "KD") == 0) {
+        return command_gain(&cursor, &gKdMilli, "KD", nowMs);
+    }
+    if (strcmp(command, "TIMEOUT") == 0) {
+        return command_timeout(&cursor, nowMs);
+    }
     if (strcmp(command, "SPEED") == 0) {
         return command_speed(&cursor, nowMs);
     }
@@ -516,7 +578,9 @@ static bool execute_command(uint32_t nowMs)
             return false;
         }
         gSpeedLimitPercent = (uint8_t) value;
-        reset_controller_state();
+        if (gMode != BLUETOOTH_MODE_STOP) {
+            gLastMotionCommandMs = nowMs;
+        }
         send_text("#OK LIMIT\r\n");
         return true;
     }
@@ -557,10 +621,17 @@ static int8_t run_pid(int32_t targetRpm, int32_t measuredRpm,
     uint32_t elapsedMs, int64_t *integralMilli, int32_t *previousError)
 {
     int32_t error;
+    int32_t targetMagnitude;
     int64_t proportional;
     int64_t derivative;
+    int64_t feedforward;
+    int64_t integralCandidate;
+    int64_t integralDelta;
+    int64_t unclampedOutput;
     int64_t output;
     int64_t limitMilli = (int64_t) gSpeedLimitPercent * 1000;
+    int64_t minOutput;
+    int64_t maxOutput;
 
     if (targetRpm == 0) {
         *integralMilli = 0;
@@ -569,32 +640,56 @@ static int8_t run_pid(int32_t targetRpm, int32_t measuredRpm,
     }
 
     error = targetRpm - measuredRpm;
+    if ((error <= SPEED_ERROR_DEADBAND_RPM) &&
+        (error >= -SPEED_ERROR_DEADBAND_RPM)) {
+        error = 0;
+    }
+
+    targetMagnitude = (targetRpm < 0) ? -targetRpm : targetRpm;
+    feedforward = SPEED_FEEDFORWARD_STATIC_MILLI +
+                  ((int64_t) SPEED_FEEDFORWARD_RPM_MILLI *
+                   targetMagnitude);
+    if (targetRpm < 0) {
+        feedforward = -feedforward;
+    }
+
     proportional = (int64_t) gKpMilli * error;
-    *integralMilli +=
+    integralDelta =
         ((int64_t) gKiMilli * error * elapsedMs) / 1000;
-    if (*integralMilli > limitMilli) {
-        *integralMilli = limitMilli;
-    } else if (*integralMilli < -limitMilli) {
-        *integralMilli = -limitMilli;
+    integralCandidate = *integralMilli + integralDelta;
+    if (integralCandidate > limitMilli) {
+        integralCandidate = limitMilli;
+    } else if (integralCandidate < -limitMilli) {
+        integralCandidate = -limitMilli;
     }
 
     derivative = ((int64_t) gKdMilli * (error - *previousError) * 1000) /
                  elapsedMs;
     *previousError = error;
-    output = proportional + *integralMilli + derivative;
 
     if (targetRpm > 0) {
-        if (output < 0) {
-            output = 0;
-        } else if (output > limitMilli) {
-            output = limitMilli;
-        }
+        minOutput = 0;
+        maxOutput = limitMilli;
     } else {
-        if (output > 0) {
-            output = 0;
-        } else if (output < -limitMilli) {
-            output = -limitMilli;
-        }
+        minOutput = -limitMilli;
+        maxOutput = 0;
+    }
+
+    unclampedOutput = feedforward + proportional +
+                      integralCandidate + derivative;
+    if ((unclampedOutput > maxOutput) && (integralDelta > 0)) {
+        /* Do not integrate further into the high output limit. */
+    } else if ((unclampedOutput < minOutput) && (integralDelta < 0)) {
+        /* Do not integrate further into the low output limit. */
+    } else {
+        *integralMilli = integralCandidate;
+    }
+
+    output = feedforward + proportional + *integralMilli + derivative;
+    if (output < minOutput) {
+        output = minOutput;
+    } else if (output > maxOutput) {
+        output = maxOutput;
     }
 
     if (output >= 0) {
@@ -616,6 +711,7 @@ void BluetoothControl_Init(void)
     gDutyPercent         = BLUETOOTH_INITIAL_DUTY_PERCENT;
     gSpeedLimitPercent   = SPEED_INITIAL_LIMIT_PERCENT;
     gLastMotionCommandMs = 0;
+    gFailsafeTimeoutMs   = BLUETOOTH_DEFAULT_FAILSAFE_MS;
     gFailsafeCount       = 0;
     gTargetLeftRpm       = 0;
     gTargetRightRpm      = 0;
@@ -629,6 +725,7 @@ void BluetoothControl_Init(void)
     gKiMilli             = SPEED_DEFAULT_KI_MILLI;
     gKdMilli             = SPEED_DEFAULT_KD_MILLI;
     gLastSpeedSampleMs   = 0;
+    gSpeedFilterReady    = false;
     stop_motors();
 }
 
@@ -697,10 +794,21 @@ void BluetoothControl_Update(uint32_t nowMs)
 
     gLeftDeltaCount  = Encoder_GetLeftDelta();
     gRightDeltaCount = Encoder_GetRightDelta();
-    gMeasuredLeftRpm =
-        calculate_rpm(gLeftDeltaCount, gLeftCountsPerRev, elapsedMs);
-    gMeasuredRightRpm =
-        calculate_rpm(gRightDeltaCount, gRightCountsPerRev, elapsedMs);
+    {
+        int32_t rawLeftRpm = calculate_rpm(
+            gLeftDeltaCount, gLeftCountsPerRev, elapsedMs);
+        int32_t rawRightRpm = calculate_rpm(
+            gRightDeltaCount, gRightCountsPerRev, elapsedMs);
+
+        if (!gSpeedFilterReady) {
+            gMeasuredLeftRpm  = rawLeftRpm;
+            gMeasuredRightRpm = rawRightRpm;
+            gSpeedFilterReady = true;
+        } else {
+            gMeasuredLeftRpm  = (gMeasuredLeftRpm + rawLeftRpm) / 2;
+            gMeasuredRightRpm = (gMeasuredRightRpm + rawRightRpm) / 2;
+        }
+    }
 
     if (gMode == BLUETOOTH_MODE_SPEED_LOOP) {
         int8_t leftCommand = run_pid(gTargetLeftRpm, gMeasuredLeftRpm,
@@ -717,9 +825,10 @@ void BluetoothControl_Update(uint32_t nowMs)
 
 bool BluetoothControl_CheckFailsafe(uint32_t nowMs)
 {
-    if ((gMode != BLUETOOTH_MODE_STOP) &&
+    if ((gFailsafeTimeoutMs != 0U) &&
+        (gMode != BLUETOOTH_MODE_STOP) &&
         ((uint32_t) (nowMs - gLastMotionCommandMs) >=
-            BLUETOOTH_FAILSAFE_MS)) {
+            gFailsafeTimeoutMs)) {
         stop_motors();
         gFailsafeCount++;
         send_text("#FAILSAFE STOP\r\n");

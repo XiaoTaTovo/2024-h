@@ -29,16 +29,38 @@ static void DelayMs(uint32_t ms)
 
 static void RunBluetoothTuning(void)
 {
+    uint32_t lastTelemetryMs = 0;
+
     TB6612_Init();
+    Encoder_Init();
+    BluetoothControl_Init();
 
-    DelayMs(2000);
+    NVIC_ClearPendingIRQ(UART_BLUETOOTH_INST_INT_IRQN);
+    NVIC_EnableIRQ(UART_BLUETOOTH_INST_INT_IRQN);
 
-    TB6612_SetMotors(0, 20);  // 只测试左轮逻辑正方向
-    DelayMs(1000);
-
-    TB6612_Stop();
+    VofaTelemetry_SendBanner();
 
     while (1) {
+        BluetoothControlStatus status;
+        uint32_t nowMs = TiMspm0Platform_Millis();
+        bool sendNow;
+
+        sendNow = BluetoothControl_ProcessPending(nowMs);
+
+        if (BluetoothControl_CheckFailsafe(nowMs)) {
+            sendNow = true;
+        }
+
+        BluetoothControl_Update(nowMs);
+
+        if (sendNow ||
+            ((uint32_t)(nowMs - lastTelemetryMs) >=
+                TELEMETRY_PERIOD_MS)) {
+            BluetoothControl_GetStatus(&status);
+            VofaTelemetry_Send(&status, nowMs);
+            lastTelemetryMs = nowMs;
+        }
+
         __WFI();
     }
 }
