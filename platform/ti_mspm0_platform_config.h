@@ -2,12 +2,13 @@
 #define H2024_TI_PLATFORM_CONFIG_H
 
 /* Replace these placeholders with measured values before ground testing. */
-#define H2024_WHEEL_DIAMETER_MM              (65.0f)
+#define H2024_WHEEL_DIAMETER_MM              (65.0f)//确定是轮值直径
 #define H2024_TRACK_WIDTH_MM                 (140.0f)
-#define H2024_ENCODER_COUNTS_PER_WHEEL_REV   (1000.0f)
+#define H2024_ENCODER_COUNTS_PER_WHEEL_REV   (724.0f)//实测值，很确定，确定是轮子转一圈的编码器计数
 #define H2024_MOTOR_UNITS_PER_MM_S           (1.0f)
 #define H2024_MOTOR_BACKEND_TB6612           (1U)
 #define H2024_TB6612_SPEED_UNITS_AT_MAX_DUTY (350)
+#define H2024_STRAIGHT_HEADING_KP            (4.0f)
 #define H2024_IMU_BIAS_DPS                   (-0.45f)
 #define H2024_IMU_USE_FIXED_BIAS             (0U)
 #define H2024_IMU_CALIBRATION_SAMPLES       (400U)

@@ -318,6 +318,7 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
     config->car.track_width_mm = H2024_TRACK_WIDTH_MM;
     config->car.encoder_counts_per_wheel_rev =
         H2024_ENCODER_COUNTS_PER_WHEEL_REV;
+    config->car.straight_heading_kp = H2024_STRAIGHT_HEADING_KP;
     config->car.arc_line_kp = H2024_LINE_PID_KP;
     config->car.arc_line_ki = H2024_LINE_PID_KI;
     config->car.arc_line_kd = H2024_LINE_PID_KD;
@@ -340,7 +341,7 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
         MOTOR_BOARD_CHANNEL_B, MOTOR_BOARD_CHANNEL_D,
         false, true, 5U,
         0, 0, 0
-    };
+    };//驱动板还是tb6612直接调试的开关
 #endif
     config->imu = (Icm42688Port){
         TiImu_Transfer, TiImu_Select, TiDelayMs, 0
@@ -362,8 +363,13 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
     config->button_active_low = true;
 
     config->motor_command_spacing_ms = H2024_MOTOR_COMMAND_SPACING_MS;
+#if H2024_MOTOR_BACKEND_TB6612
+    config->set_encoder_polarity_on_arm = false;
+    config->set_speed_pid_on_arm = false;
+#else
     config->set_encoder_polarity_on_arm = true;
     config->set_speed_pid_on_arm = true;
+#endif
     for (uint8_t channel = 0U; channel < MOTOR_BOARD_CHANNEL_COUNT; channel++) {
         config->encoder_polarity[channel] = true;
         config->speed_pid[channel] = (MotorBoardPid){

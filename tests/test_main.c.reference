@@ -477,6 +477,14 @@ static void TestSafety(void)
     input.imu.timestamp_ms = 100U;
     faults = CarSafety_Evaluate(&config, 120U, &input, true, false);
     assert(faults == CAR_FAULT_NONE);
+
+    input.encoder.timestamp_ms = 121U;
+    input.imu.timestamp_ms = 121U;
+    faults = CarSafety_Evaluate(&config, 120U, &input, true, false);
+    assert(faults == CAR_FAULT_NONE);
+
+    input.encoder.timestamp_ms = 100U;
+    input.imu.timestamp_ms = 100U;
     faults = CarSafety_Evaluate(&config, 500U, &input, true, false);
     assert((faults & CAR_FAULT_ENCODER_STALE) != 0U);
     assert((faults & CAR_FAULT_IMU_STALE) != 0U);

@@ -35,7 +35,7 @@ typedef struct {
     uint16_t index;
     uint32_t segment_start_ms;
     float segment_start_distance_mm;
-    float segment_start_yaw_deg;
+    float segment_start_yaw_deg;//起始的yaw
     float line_integral;
     float line_previous_error;
     uint32_t line_previous_ms;

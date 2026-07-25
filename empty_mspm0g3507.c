@@ -81,6 +81,12 @@ void UART_BLUETOOTH_INST_IRQHandler(void)
 
 static CarFirmware gFirmware;
 static OLED_Status gH2024OledStatus = OLED_STATUS_ERROR_NOT_INITIALIZED;
+static Button gH2024OledPageButton;
+static uint8_t gH2024OledPage;
+static bool gH2024OledRefreshRequested = true;
+
+#define H2024_OLED_RENDER_PERIOD_MS   (200U)
+#define H2024_OLED_TX_PERIOD_MS       (1U)
 
 static const char *H2024_ModeName(H2024Mode mode)
 {
@@ -151,92 +157,121 @@ static void H2024_InitOled(void)
     }
 }
 
+static bool H2024_ReadOledPageButton(void *context)
+{
+    (void)context;
+    return TiMspm0Platform_ReadKey2Level();
+}
+
+static void H2024_UpdateOledPageButton(uint32_t now_ms)
+{
+    Button_Update(&gH2024OledPageButton, now_ms);
+    if (Button_TakePressedEvent(&gH2024OledPageButton)) {
+        gH2024OledPage ^= 1U;
+        gH2024OledRefreshRequested = true;
+    }
+}
+
 static void H2024_RefreshOled(const CarFirmware *firmware,
                               uint32_t now_ms)
 {
-    static uint32_t last_refresh_ms;
-    static uint8_t page;
+    static uint32_t last_render_ms;
+    static uint32_t last_tx_ms;
+    static uint8_t tx_page = OLED_PAGE_COUNT;
     char line[22];
     uint32_t faults;
     const char *segment_state;
 
     if ((firmware == 0) || !OLED_IsInitialized() ||
-        (gH2024OledStatus != OLED_STATUS_OK) ||
-        ((uint32_t)(now_ms - last_refresh_ms) < 50U)) {
+        (gH2024OledStatus != OLED_STATUS_OK)) {
         return;
     }
-    last_refresh_ms = now_ms;
 
-    if (page == 0U) {
-        faults = firmware->hardware_faults | firmware->output.faults;
-        segment_state = firmware->output.route_finished ? "DONE" :
-                        (firmware->output.route_running ? "RUN" : "STOP");
-        (void)OLED_Clear();
-        (void)snprintf(line, sizeof(line), "MODE:%s TB",
-                       H2024_ModeName(firmware->config.mode));
-        (void)OLED_ShowString(0U, 0U, line);
-        (void)OLED_ShowString(0U, 1U,
-                              firmware->yaw.calibrated ?
-                              "CAL:OK" : "CAL:WAIT");
-        H2024_ShowFixed1(2U, "YAW:", firmware->imu_sample.yaw_deg);
-        (void)snprintf(line, sizeof(line), "SEG:%02u %s",
-                       (unsigned)firmware->output.route_index,
-                       segment_state);
-        (void)OLED_ShowString(0U, 3U, line);
-        (void)snprintf(line, sizeof(line), "L:%+ld R:%+ld",
-                       (long)firmware->output.motor.left_mm_s,
-                       (long)firmware->output.motor.right_mm_s);
-        (void)OLED_ShowString(0U, 4U, line);
-        (void)snprintf(line, sizeof(line), "PWM:%d/%d",
-                       TB6612_GetLeftCommand(),
-                       TB6612_GetRightCommand());
-        (void)OLED_ShowString(0U, 5U, line);
-        (void)snprintf(line, sizeof(line), "F:%08lX",
-                       (unsigned long)faults);
-        (void)OLED_ShowString(0U, 6U, line);
-        (void)snprintf(line, sizeof(line), "KEYH:%u%u%u K1 S/S",
-                       TiMspm0Platform_ReadKey1Level() ? 1U : 0U,
-                       TiMspm0Platform_ReadKey2Level() ? 1U : 0U,
-                       TiMspm0Platform_ReadKey3Level() ? 1U : 0U);
-        (void)OLED_ShowString(0U, 7U, line);
-    } else if (page == 1U) {
-        (void)OLED_Clear();
-        (void)snprintf(line, sizeof(line), "BTN:%lu %s",
-                       (unsigned long)firmware->button_event_count,
-                       H2024_ButtonActionName(firmware->last_button_action));
-        (void)OLED_ShowString(0U, 0U, line);
-        (void)snprintf(line, sizeof(line), "I:%c E:%c M:%c",
-                       firmware->last_button_imu_valid ? 'Y' : 'N',
-                       firmware->last_button_encoder_valid ? 'Y' : 'N',
-                       firmware->last_button_motor_armed ? 'Y' : 'N');
-        (void)OLED_ShowString(0U, 1U, line);
-        (void)snprintf(line, sizeof(line), "STAT:%ld",
-                       (long)firmware->last_arm_status);
-        (void)OLED_ShowString(0U, 2U, line);
-        (void)snprintf(line, sizeof(line), "ENC:%c",
-                       firmware->encoder_valid_current ? 'Y' : 'N');
-        (void)OLED_ShowString(0U, 3U, line);
-        (void)snprintf(line, sizeof(line), "TB:%c SER:%c",
-                       firmware->config.motor.direct_set_wheel_speeds != 0 ?
-                       'Y' : 'N',
-                       firmware->config.motor.send != 0 ? 'Y' : 'N');
-        (void)OLED_ShowString(0U, 4U, line);
-        (void)snprintf(line, sizeof(line), "APP:%c RUN:%c",
-                       firmware->app.armed ? 'Y' : 'N',
-                       firmware->app.executor.running ? 'Y' : 'N');
-        (void)OLED_ShowString(0U, 5U, line);
-        (void)snprintf(line, sizeof(line), "PWM:%d/%d",
-                       TB6612_GetLeftCommand(),
-                       TB6612_GetRightCommand());
-        (void)OLED_ShowString(0U, 6U, line);
-        H2024_ShowFixed1(7U, "BIAS:", firmware->yaw.bias_dps);
+    if (gH2024OledRefreshRequested ||
+        ((tx_page >= OLED_PAGE_COUNT) &&
+         ((uint32_t)(now_ms - last_render_ms) >=
+          H2024_OLED_RENDER_PERIOD_MS))) {
+        last_render_ms = now_ms;
+        gH2024OledRefreshRequested = false;
+        tx_page = 0U;
+
+        if (gH2024OledPage == 0U) {
+            faults = firmware->hardware_faults | firmware->output.faults;
+            segment_state = firmware->output.route_finished ? "DONE" :
+                            (firmware->output.route_running ? "RUN" : "STOP");
+            (void)OLED_Clear();
+            (void)snprintf(line, sizeof(line), "MODE:%s TB P1",
+                           H2024_ModeName(firmware->config.mode));
+            (void)OLED_ShowString(0U, 0U, line);
+            (void)OLED_ShowString(0U, 1U,
+                                  firmware->yaw.calibrated ?
+                                  "CAL:OK" : "CAL:WAIT");
+            H2024_ShowFixed1(2U, "YAW:", firmware->imu_sample.yaw_deg);
+            (void)snprintf(line, sizeof(line), "SEG:%02u %s",
+                           (unsigned)firmware->output.route_index,
+                           segment_state);
+            (void)OLED_ShowString(0U, 3U, line);
+            (void)snprintf(line, sizeof(line), "L:%+ld R:%+ld",
+                           (long)firmware->output.motor.left_mm_s,
+                           (long)firmware->output.motor.right_mm_s);
+            (void)OLED_ShowString(0U, 4U, line);
+            (void)snprintf(line, sizeof(line), "PWM:%d/%d",
+                           TB6612_GetLeftCommand(),
+                           TB6612_GetRightCommand());
+            (void)OLED_ShowString(0U, 5U, line);
+            (void)snprintf(line, sizeof(line), "F:%08lX",
+                           (unsigned long)faults);
+            (void)OLED_ShowString(0U, 6U, line);
+            (void)snprintf(line, sizeof(line), "K:%u%u%u K1RUN K2PG",
+                           TiMspm0Platform_ReadKey1Level() ? 1U : 0U,
+                           TiMspm0Platform_ReadKey2Level() ? 1U : 0U,
+                           TiMspm0Platform_ReadKey3Level() ? 1U : 0U);
+            (void)OLED_ShowString(0U, 7U, line);
+        } else {
+            (void)OLED_Clear();
+            (void)snprintf(line, sizeof(line), "P2 BTN:%lu %s",
+                           (unsigned long)firmware->button_event_count,
+                           H2024_ButtonActionName(
+                               firmware->last_button_action));
+            (void)OLED_ShowString(0U, 0U, line);
+            (void)snprintf(line, sizeof(line), "I:%c E:%c M:%c",
+                           firmware->imu_sample.valid ? 'Y' : 'N',
+                           firmware->encoder_valid_current ? 'Y' : 'N',
+                           firmware->motor_armed ? 'Y' : 'N');
+            (void)OLED_ShowString(0U, 1U, line);
+            (void)snprintf(line, sizeof(line), "STAT:%ld",
+                           (long)firmware->last_arm_status);
+            (void)OLED_ShowString(0U, 2U, line);
+            (void)snprintf(line, sizeof(line), "ENC:%c",
+                           firmware->encoder_valid_current ? 'Y' : 'N');
+            (void)OLED_ShowString(0U, 3U, line);
+            (void)snprintf(line, sizeof(line), "TB:%c SER:%c",
+                           firmware->config.motor.direct_set_wheel_speeds != 0 ?
+                           'Y' : 'N',
+                           firmware->config.motor.send != 0 ? 'Y' : 'N');
+            (void)OLED_ShowString(0U, 4U, line);
+            (void)snprintf(line, sizeof(line), "APP:%c RUN:%c",
+                           firmware->app.armed ? 'Y' : 'N',
+                           firmware->app.executor.running ? 'Y' : 'N');
+            (void)OLED_ShowString(0U, 5U, line);
+            (void)snprintf(line, sizeof(line), "PWM:%d/%d",
+                           TB6612_GetLeftCommand(),
+                           TB6612_GetRightCommand());
+            (void)OLED_ShowString(0U, 6U, line);
+            H2024_ShowFixed1(7U, "BIAS:", firmware->yaw.bias_dps);
+        }
     }
 
-    if (OLED_Update() != OLED_STATUS_OK) {
+    if ((tx_page >= OLED_PAGE_COUNT) ||
+        ((uint32_t)(now_ms - last_tx_ms) < H2024_OLED_TX_PERIOD_MS)) {
+        return;
+    }
+    last_tx_ms = now_ms;
+    if (OLED_UpdatePages(tx_page, 1U) != OLED_STATUS_OK) {
         gH2024OledStatus = OLED_STATUS_ERROR_I2C_BUS;
         return;
     }
-    page = (uint8_t)((page + 1U) % 2U);
+    tx_page++;
 }
 
 static H2024Mode GetH2024Mode(void)
@@ -261,6 +296,8 @@ static void RunH2024Firmware(void)
 
     TiMspm0Platform_Init();
     H2024_InitOled();
+    Button_Init(&gH2024OledPageButton, H2024_ReadOledPageButton,
+                0, true, 20U);
     status = TiMspm0Platform_BuildConfig(&config, GetH2024Mode());
     if (status == CAR_OK) {
         status = CarFirmware_Init(
@@ -277,6 +314,7 @@ static void RunH2024Firmware(void)
 
         TiMspm0Platform_PollMotorRx(&gFirmware);
         CarFirmware_Tick(&gFirmware, now_ms);
+        H2024_UpdateOledPageButton(now_ms);
         H2024_RefreshOled(&gFirmware, now_ms);
         __WFI();
     }

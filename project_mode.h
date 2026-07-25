@@ -14,7 +14,7 @@
  * validated. Select another mode here after gray calibration is complete.
  */
 #ifndef PROJECT_MODE
-#define PROJECT_MODE PROJECT_MODE_TURN_DEBUG
+#define PROJECT_MODE PROJECT_MODE_H2024_ITEM_2
 
 #endif
 

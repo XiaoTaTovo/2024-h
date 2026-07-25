@@ -136,20 +136,20 @@ CarStatus CarRouteExecutor_Update(CarRouteExecutor *executor,
         case CAR_SEGMENT_TURN:
         {
             float target_yaw = executor->segment_start_yaw_deg + segment->value;
-            float turn_direction = (segment->value >= 0.0f) ? 1.0f : -1.0f;
+            float turn_direction = (segment->value >= 0.0f) ? 1.0f : -1.0f;//控制方向，我们现在的逻辑是左转为正，右转为负
             float turn_error = (target_yaw - yaw_deg) * turn_direction;
             float turn_speed;
 
             if (turn_error <= config->angle_tolerance_deg) {
                 CarRoute_Advance(executor, now_ms, odometry, yaw_deg);
                 break;
-            }
+            }//最小的这个角度误差，就不用动了
 
             /* Proportional yaw loop with a small floor to overcome stiction. */
             turn_speed = turn_error * config->turn_heading_kp;
             if (turn_speed < config->turn_min_speed_mm_s) {
                 turn_speed = config->turn_min_speed_mm_s;
-            }
+            }//克服静摩擦力加机械死区
             turn_speed = CarRoute_Clamp(
                 turn_speed, CarRoute_Abs(segment->speed));
             if (segment->value > 0.0f) {
@@ -158,11 +158,12 @@ CarStatus CarRouteExecutor_Update(CarRouteExecutor *executor,
             } else {
                 motor->left_mm_s = turn_speed;
                 motor->right_mm_s = 0.0f;
-            }
+            }//左转为正，所以左轮速度为0
             motor->enable = true;
             break;
         }
-        //转弯段
+        //转弯段逻辑：先算目标值，就是起点加要转到的角度
+        //error 差的角度
         case CAR_SEGMENT_ARC:
         {
             float radius = CarRoute_Abs(segment->value);

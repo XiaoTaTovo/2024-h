@@ -4,7 +4,8 @@ static bool CarSafety_IsStale(uint32_t now_ms,
                               uint32_t timestamp_ms,
                               uint32_t timeout_ms)
 {
-    return (uint32_t)(now_ms - timestamp_ms) > timeout_ms;
+    /* A live sampler can timestamp one tick after the caller snapshots now. */
+    return (int32_t)(now_ms - timestamp_ms) > (int32_t)timeout_ms;
 }
 
 uint32_t CarSafety_Evaluate(const CarConfig *config,

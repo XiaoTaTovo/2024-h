@@ -6,7 +6,7 @@
 #define H2024_DIAGONAL_MM (1280.6248f)
 #define H2024_DIAGONAL_TURN_DEG (38.6598f)
 #define H2024_LOOP_TURN_DEG (141.3402f)
-#define H2024_DEBUG_TURN_DEG (30.0f)
+#define H2024_DEBUG_TURN_DEG (-30.0f)//2024转向环调试参数，目前是向左转30
 
 static CarStatus H2024_Add(CarRoute *route,
                            CarSegmentType type,

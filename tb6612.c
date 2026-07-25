@@ -39,7 +39,7 @@ static int8_t units_to_percent(int16_t units,
 {
     int32_t scaled;
     int32_t denominator = (units_at_max_duty > 0) ?
-        units_at_max_duty : 350;
+        units_at_max_duty : 350;//规定映射
 
     scaled = (int32_t)units * (int32_t)TB6612_MAX_DUTY_PERCENT;
     if (scaled >= 0) {
@@ -54,7 +54,11 @@ static int8_t units_to_percent(int16_t units,
     }
     return (int8_t)scaled;
 }
-
+//units_at_max_duty这个参数的意思是最大占空比的时候的这个对应的速度，单位是mm/s,但是现在是开环，也从来没有测试过，以后变成闭环
+// 占空比% = 速度指令 / 350 × 80
+//现在速度的规定映射是 350 ，对应最大占空比是80
+//也是很好理解 速度350对应百分之80，那么要求一个指定速度，对应除以速度350即可再乘以80
+//所以想要多少占空比就是这个规定映射乘以对应的百分比即可
 static void set_left_direction(int8_t percent)
 {//先都清零，clear函数是清零的：确保没有一瞬间都是1，这个叫刹车状态（电机两端短接，强行按住）会有卡顿和异响
     //然后根据我们这个left的值来确定正反转和我们要的前进方向的关系
