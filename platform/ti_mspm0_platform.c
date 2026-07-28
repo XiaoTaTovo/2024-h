@@ -193,6 +193,12 @@ static bool TiButton_Read(void *context)
     return TiMspm0Platform_ReadKey1Level();
 }
 
+static bool TiGrayCalButton_Read(void *context)
+{
+    (void)context;
+    return TiMspm0Platform_ReadKey3Level();
+}
+
 static void TiBuzzer_Set(bool enabled, void *context)
 {
     (void)context;
@@ -241,6 +247,28 @@ void TiMspm0Platform_Init(void)
     TB6612_MotorBoardContextInit(
         &g_tb6612_context, TiMspm0Platform_MillisAdapter, 0,
         H2024_TB6612_SPEED_UNITS_AT_MAX_DUTY);
+#if H2024_TASK_SPEED_LOOP_ENABLE
+    {
+        const TB6612SpeedLoopConfig speed_loop = {
+            .wheel_diameter_mm = H2024_WHEEL_DIAMETER_MM,
+            .left_counts_per_rev =
+                (uint32_t)H2024_ENCODER_COUNTS_PER_WHEEL_REV,
+            .right_counts_per_rev =
+                (uint32_t)H2024_ENCODER_COUNTS_PER_WHEEL_REV,
+            .control_period_ms = H2024_TASK_SPEED_LOOP_PERIOD_MS,
+            .kp_milli = H2024_TASK_SPEED_KP_MILLI,
+            .ki_milli = H2024_TASK_SPEED_KI_MILLI,
+            .kd_milli = H2024_TASK_SPEED_KD_MILLI,
+            .feedforward_static_milli =
+                H2024_TASK_SPEED_FF_STATIC_MILLI,
+            .feedforward_rpm_milli = H2024_TASK_SPEED_FF_RPM_MILLI,
+            .error_deadband_rpm = H2024_TASK_SPEED_DEADBAND_RPM,
+            .output_limit_percent = H2024_TASK_SPEED_LIMIT_PERCENT
+        };
+        (void)TB6612_MotorBoardConfigureSpeedLoop(&g_tb6612_context,
+                                                   &speed_loop);
+    }
+#endif
     TB6612_Init();
     Encoder_Init();
     while (!DL_UART_Main_isRXFIFOEmpty(UART_MOTOR_INST)) {
@@ -284,6 +312,14 @@ bool TiMspm0Platform_ReadKey3Level(void)
     return (DL_GPIO_readPins(GPIO_KEYS_PORT, GPIO_KEYS_KEY3_PIN) != 0U);
 }
 
+void TiMspm0Platform_ServiceMotorBackend(void)
+{
+#if H2024_TASK_SPEED_LOOP_ENABLE
+    /* Keep the 50 ms wheel loop independent from the 20 ms route update. */
+    TB6612_MotorBoardService(&g_tb6612_context);
+#endif
+}
+
 void TiMspm0Platform_PollMotorRx(CarFirmware *firmware)
 {
     uint32_t now_ms = TiMspm0Platform_Millis();
@@ -323,6 +359,105 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
     config->car.arc_line_ki = H2024_LINE_PID_KI;
     config->car.arc_line_kd = H2024_LINE_PID_KD;
     config->car.arc_line_integral_limit = H2024_LINE_PID_INTEGRAL_LIMIT;
+    config->car.gray_finish_arm_ratio = H2024_FINISH_ARM_RATIO;
+    config->car.gray_finish_min_confidence = H2024_FINISH_MIN_CONFIDENCE;
+    config->car.gray_finish_min_active = H2024_FINISH_MIN_ACTIVE;
+    config->car.gray_finish_consecutive_frames =
+        H2024_FINISH_CONSECUTIVE_FRAMES;
+    config->car.line_corner_min_position = H2024_LINE_CORNER_MIN_POSITION;
+    config->car.line_corner_consecutive_frames =
+        H2024_LINE_CORNER_CONSECUTIVE_FRAMES;
+    config->car.line_lost_consecutive_frames =
+        H2024_LINE_LOST_CONSECUTIVE_FRAMES;
+    config->car.line_heading_kp = H2026_LINE_HEADING_KP;
+    config->car.line_heading_max_correction_mm_s =
+        H2026_LINE_HEADING_MAX_CORRECTION;
+    config->car.line_follow_kp = H2026_LINE_FOLLOW_KP;
+    config->car.line_follow_ki = H2026_LINE_FOLLOW_KI;
+    config->car.line_follow_kd = H2026_LINE_FOLLOW_KD;
+    config->car.line_follow_integral_limit =
+        H2026_LINE_FOLLOW_INTEGRAL_LIMIT;
+    config->car.line_corner_min_right_ratio_permille =
+        H2026_CORNER_MIN_RIGHT_RATIO_PERMILLE;
+    config->car.line_corner_min_active = H2026_CORNER_MIN_ACTIVE;
+    config->car.line_corner_min_span = H2026_CORNER_MIN_SPAN;
+    config->car.line_sensor_to_axle_mm = H2026_ARC_SENSOR_TO_AXLE_MM;
+    config->car.line_corner_pivot_approach_mm =
+        H2026_CORNER_PIVOT_APPROACH_MM;
+    config->car.line_corner_approach_speed_mm_s =
+        H2026_CORNER_APPROACH_SPEED_MM_S;
+    config->car.turn_line_reacquire_min_angle_deg =
+        H2026_TURN_REACQUIRE_MIN_DEG;
+    config->car.turn_line_reacquire_max_position =
+        H2026_TURN_REACQUIRE_MAX_POSITION;
+    config->car.turn_line_reacquire_frames =
+        H2026_TURN_REACQUIRE_FRAMES;
+    if ((mode == H2026_MODE_ITEM_1) ||
+        (mode == H2026_MODE_ITEM_2) ||
+        (mode == H2026_MODE_ITEM_3) ||
+        (mode == H2026_MODE_ITEM_4)) {
+        /* H2024 keeps legacy line.valid semantics; only H2026 consumes the
+         * adaptive narrow/wide/split classification and safe line search. */
+        config->car.gray_shape_filter_enable = true;
+        config->car.gray_center_offset = H2026_GRAY_CENTER_OFFSET;
+        config->car.gray_relative_delta = H2026_GRAY_RELATIVE_DELTA;
+        config->car.gray_track_min_confidence =
+            H2026_GRAY_TRACK_MIN_CONFIDENCE;
+        config->car.gray_track_enter_frames =
+            H2026_GRAY_TRACK_ENTER_FRAMES;
+        config->car.gray_track_lost_frames =
+            H2026_GRAY_TRACK_LOST_FRAMES;
+        config->car.gray_track_max_active = H2026_GRAY_TRACK_MAX_ACTIVE;
+        config->car.gray_track_max_span = H2026_GRAY_TRACK_MAX_SPAN;
+        config->car.gray_wide_min_active = H2026_GRAY_WIDE_MIN_ACTIVE;
+        config->car.gray_wide_min_background =
+            H2026_GRAY_WIDE_MIN_BACKGROUND;
+        config->car.arc_line_entry_min_angle_deg =
+            H2026_ARC_LINE_ENTRY_MIN_ANGLE_DEG;
+        config->car.arc_line_entry_frames = H2026_ARC_LINE_ENTRY_FRAMES;
+        config->car.arc_line_blend_ms = H2026_ARC_LINE_BLEND_MS;
+        config->car.diagonal_line_arm_ratio =
+            H2026_DIAGONAL_LINE_ARM_RATIO;
+        config->car.diagonal_line_approach_mm =
+            H2026_DIAGONAL_LINE_APPROACH_MM;
+        config->car.line_cross_center_position =
+            H2026_LINE_CROSS_CENTER_POSITION;
+        config->car.line_cross_capture_window_mm =
+            H2026_LINE_CROSS_CAPTURE_WINDOW_MM;
+        config->car.line_cross_capture_speed_mm_s =
+            H2026_LINE_CROSS_CAPTURE_SPEED_MM_S;
+        config->car.line_cross_capture_kp =
+            H2026_LINE_CROSS_CAPTURE_KP;
+        config->car.line_cross_capture_max_correction_mm_s =
+            H2026_LINE_CROSS_CAPTURE_MAX_CORRECTION_MM_S;
+        config->car.line_seek_max_correction_mm_s =
+            H2026_LINE_SEEK_MAX_CORRECTION_MM_S;
+        config->car.turn_inner_speed_ratio = H2026_TURN_INNER_SPEED_RATIO;
+        config->car.turn_settle_ms = H2026_TURN_SETTLE_MS;
+        config->car.turn_settle_speed_mm_s =
+            H2026_TURN_SETTLE_SPEED_MM_S;
+        config->car.required_line_search_mm =
+            H2026_REQUIRED_LINE_SEARCH_MM;
+        config->car.required_line_search_speed_mm_s =
+            H2026_REQUIRED_LINE_SEARCH_SPEED_MM_S;
+    }
+    if ((mode == H2026_MODE_ITEM_2) ||
+        (mode == H2026_MODE_ITEM_3) ||
+        (mode == H2026_MODE_ITEM_4)) {
+        /* All H2026 multi-segment routes share the empirically identified
+         * chassis geometry and conservative cascaded-loop limits. */
+        config->car.arc_effective_track_width_mm =
+            H2026_ARC_EFFECTIVE_TRACK_WIDTH_MM;
+        config->car.straight_heading_kp = H2026_STRAIGHT_HEADING_KP;
+        config->car.straight_heading_max_correction_mm_s =
+            H2026_STRAIGHT_HEADING_MAX_CORR_MM_S;
+        config->car.arc_line_max_correction_mm_s =
+            H2026_ARC_LINE_MAX_CORR_MM_S;
+        config->car.arc_line_exit_min_angle_deg =
+            H2026_ARC_LINE_EXIT_MIN_ANGLE_DEG;
+        config->car.arc_line_exit_lost_frames =
+            H2026_ARC_LINE_EXIT_LOST_FRAMES;
+    }
     config->mode = mode;
 
 #if H2024_MOTOR_BACKEND_TB6612
@@ -351,6 +486,10 @@ CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
         H2024_GRAY_SETTLE_US, H2024_GRAY_SAMPLES_PER_CHANNEL
     };
     config->button_read = TiButton_Read;
+    config->gray_cal_button_read = TiGrayCalButton_Read;
+    config->require_runtime_gray_calibration =
+        (mode == H2026_MODE_ITEM_1) || (mode == H2026_MODE_ITEM_2) ||
+        (mode == H2026_MODE_ITEM_3) || (mode == H2026_MODE_ITEM_4);
     config->buzzer_set = TiBuzzer_Set;
     config->motor_units_per_mm_s = H2024_MOTOR_UNITS_PER_MM_S;
     config->yaw_axis = CAR_IMU_AXIS_Z;

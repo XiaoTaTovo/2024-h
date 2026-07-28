@@ -34,6 +34,7 @@ bool TiMspm0Platform_ReadKey1Level(void);
 bool TiMspm0Platform_ReadKey2Level(void);
 bool TiMspm0Platform_ReadKey3Level(void);
 void TiMspm0Platform_PollMotorRx(CarFirmware *firmware);
+void TiMspm0Platform_ServiceMotorBackend(void);
 void TiMspm0Platform_GetDiagnostics(TiMspm0PlatformDiagnostics *diagnostics);
 CarStatus TiMspm0Platform_BuildConfig(CarFirmwareConfig *config,
                                       H2024Mode mode);

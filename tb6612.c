@@ -3,6 +3,8 @@
 #include "encoder.h"
 #include "ti_msp_dl_config.h"
 
+#define TB6612_PI_F (3.14159265358979323846f)
+
 static int8_t gLeftCommand;
 static int8_t gRightCommand;
 
@@ -53,6 +55,184 @@ static int8_t units_to_percent(int16_t units,
         scaled = -(int32_t)TB6612_MAX_DUTY_PERCENT;
     }
     return (int8_t)scaled;
+}
+
+static int32_t round_signed(float value)
+{
+    return (int32_t)(value + ((value >= 0.0f) ? 0.5f : -0.5f));
+}
+
+static int32_t speed_to_rpm(const TB6612MotorBoardContext *context,
+                            int16_t speed_mm_s)
+{
+    float circumference_mm = TB6612_PI_F *
+        context->speed_loop.wheel_diameter_mm;
+
+    if (circumference_mm <= 0.0f) {
+        return 0;
+    }
+    return round_signed(((float)speed_mm_s * 60.0f) / circumference_mm);
+}
+
+static int32_t calculate_rpm(int32_t delta_count,
+                             uint32_t counts_per_rev,
+                             uint32_t elapsed_ms)
+{
+    int64_t numerator;
+    int64_t denominator;
+
+    if ((counts_per_rev == 0U) || (elapsed_ms == 0U)) {
+        return 0;
+    }
+    numerator = (int64_t)delta_count * 60000;
+    denominator = (int64_t)counts_per_rev * elapsed_ms;
+    numerator += (numerator >= 0) ? denominator / 2 : -denominator / 2;
+    return (int32_t)(numerator / denominator);
+}
+
+static int8_t run_speed_pid(const TB6612SpeedLoopConfig *config,
+                            int32_t target_rpm,
+                            int32_t measured_rpm,
+                            uint32_t elapsed_ms,
+                            int64_t *integral_milli,
+                            int32_t *previous_error)
+{
+    int32_t error;
+    int32_t target_magnitude;
+    int64_t proportional;
+    int64_t derivative;
+    int64_t feedforward;
+    int64_t integral_candidate;
+    int64_t integral_delta;
+    int64_t unclamped_output;
+    int64_t output;
+    int64_t limit_milli = (int64_t)config->output_limit_percent * 1000;
+    int64_t min_output;
+    int64_t max_output;
+
+    if (target_rpm == 0) {
+        *integral_milli = 0;
+        *previous_error = 0;
+        return 0;
+    }
+
+    error = target_rpm - measured_rpm;
+    if ((error <= config->error_deadband_rpm) &&
+        (error >= -config->error_deadband_rpm)) {
+        error = 0;
+    }
+    target_magnitude = (target_rpm < 0) ? -target_rpm : target_rpm;
+    feedforward = config->feedforward_static_milli +
+                  (int64_t)config->feedforward_rpm_milli * target_magnitude;
+    if (target_rpm < 0) {
+        feedforward = -feedforward;
+    }
+
+    proportional = (int64_t)config->kp_milli * error;
+    integral_delta = ((int64_t)config->ki_milli * error * elapsed_ms) / 1000;
+    integral_candidate = *integral_milli + integral_delta;
+    if (integral_candidate > limit_milli) {
+        integral_candidate = limit_milli;
+    } else if (integral_candidate < -limit_milli) {
+        integral_candidate = -limit_milli;
+    }
+    derivative = ((int64_t)config->kd_milli *
+                  (error - *previous_error) * 1000) / elapsed_ms;
+    *previous_error = error;
+
+    if (target_rpm > 0) {
+        min_output = 0;
+        max_output = limit_milli;
+    } else {
+        min_output = -limit_milli;
+        max_output = 0;
+    }
+    unclamped_output = feedforward + proportional +
+                       integral_candidate + derivative;
+    if (!(((unclamped_output > max_output) && (integral_delta > 0)) ||
+          ((unclamped_output < min_output) && (integral_delta < 0)))) {
+        *integral_milli = integral_candidate;
+    }
+
+    output = feedforward + proportional + *integral_milli + derivative;
+    if (output < min_output) {
+        output = min_output;
+    } else if (output > max_output) {
+        output = max_output;
+    }
+    output = (output >= 0) ? (output + 500) / 1000 :
+                             (output - 500) / 1000;
+    return (int8_t)output;
+}
+
+static void reset_speed_loop_state(TB6612MotorBoardContext *context)
+{
+    context->target_left_rpm = 0;
+    context->target_right_rpm = 0;
+    context->measured_left_rpm = 0;
+    context->measured_right_rpm = 0;
+    context->left_delta_count = 0;
+    context->right_delta_count = 0;
+    context->left_previous_error = 0;
+    context->right_previous_error = 0;
+    context->left_integral_milli = 0;
+    context->right_integral_milli = 0;
+    context->last_sample_elapsed_ms = 0U;
+    context->encoder_sample_ready = false;
+    context->speed_filter_ready = false;
+}
+
+static void update_speed_loop(TB6612MotorBoardContext *context,
+                              uint32_t now_ms,
+                              uint32_t elapsed_ms)
+{
+    int32_t left_count = Encoder_GetLeftCount();
+    int32_t right_count = Encoder_GetRightCount();
+    int32_t raw_left_rpm;
+    int32_t raw_right_rpm;
+    int8_t left_output;
+    int8_t right_output;
+
+    context->left_delta_count = (int32_t)((uint32_t)left_count -
+                                           (uint32_t)context->previous_left_count);
+    context->right_delta_count = (int32_t)((uint32_t)right_count -
+                                            (uint32_t)context->previous_right_count);
+    context->previous_left_count = left_count;
+    context->previous_right_count = right_count;
+    context->previous_control_ms = now_ms;
+    context->last_sample_elapsed_ms = elapsed_ms;
+
+    raw_left_rpm = calculate_rpm(context->left_delta_count,
+                                 context->speed_loop.left_counts_per_rev,
+                                 elapsed_ms);
+    raw_right_rpm = calculate_rpm(context->right_delta_count,
+                                  context->speed_loop.right_counts_per_rev,
+                                  elapsed_ms);
+    if (!context->speed_filter_ready) {
+        context->measured_left_rpm = raw_left_rpm;
+        context->measured_right_rpm = raw_right_rpm;
+        context->speed_filter_ready = true;
+    } else {
+        context->measured_left_rpm =
+            (context->measured_left_rpm + raw_left_rpm) / 2;
+        context->measured_right_rpm =
+            (context->measured_right_rpm + raw_right_rpm) / 2;
+    }
+
+    left_output = run_speed_pid(&context->speed_loop,
+                                context->target_left_rpm,
+                                context->measured_left_rpm,
+                                elapsed_ms,
+                                &context->left_integral_milli,
+                                &context->left_previous_error);
+    right_output = run_speed_pid(&context->speed_loop,
+                                 context->target_right_rpm,
+                                 context->measured_right_rpm,
+                                 elapsed_ms,
+                                 &context->right_integral_milli,
+                                 &context->right_previous_error);
+    TB6612_SetMotors(left_output, right_output);
+    context->update_count++;
 }
 //units_at_max_duty这个参数的意思是最大占空比的时候的这个对应的速度，单位是mm/s,但是现在是开环，也从来没有测试过，以后变成闭环
 // 占空比% = 速度指令 / 350 × 80
@@ -150,9 +330,123 @@ void TB6612_MotorBoardContextInit(TB6612MotorBoardContext *context,
     if (context == 0) {
         return;
     }
+    *context = (TB6612MotorBoardContext){0};
     context->now_ms = now_ms;
     context->now_context = now_context;
     context->speed_units_at_max_duty = speed_units_at_max_duty;
+}
+
+bool TB6612_MotorBoardConfigureSpeedLoop(
+    TB6612MotorBoardContext *context,
+    const TB6612SpeedLoopConfig *config)
+{
+    if ((context == 0) || (config == 0) || (context->now_ms == 0) ||
+        (config->wheel_diameter_mm <= 0.0f) ||
+        (config->left_counts_per_rev == 0U) ||
+        (config->right_counts_per_rev == 0U) ||
+        (config->control_period_ms == 0U) ||
+        (config->output_limit_percent == 0U) ||
+        (config->output_limit_percent > TB6612_MAX_DUTY_PERCENT)) {
+        return false;
+    }
+    context->speed_loop = *config;
+    context->speed_loop_enabled = true;
+    context->update_count = 0U;
+    reset_speed_loop_state(context);
+    return true;
+}
+
+bool TB6612_MotorBoardGetSpeedLoopConfig(
+    const TB6612MotorBoardContext *context,
+    TB6612SpeedLoopConfig *config)
+{
+    if ((context == 0) || (config == 0) ||
+        !context->speed_loop_enabled) {
+        return false;
+    }
+    *config = context->speed_loop;
+    return true;
+}
+
+bool TB6612_MotorBoardUpdateSpeedLoopTuning(
+    TB6612MotorBoardContext *context,
+    uint32_t kp_milli,
+    uint32_t ki_milli,
+    uint32_t kd_milli,
+    uint8_t output_limit_percent)
+{
+    if ((context == 0) || !context->speed_loop_enabled ||
+        (output_limit_percent == 0U) ||
+        (output_limit_percent > TB6612_MAX_DUTY_PERCENT)) {
+        return false;
+    }
+
+    context->speed_loop.kp_milli = kp_milli;
+    context->speed_loop.ki_milli = ki_milli;
+    context->speed_loop.kd_milli = kd_milli;
+    context->speed_loop.output_limit_percent = output_limit_percent;
+    /* Keep the current route target, but remove history from the old tuning.
+     * Seed D history with the current error to avoid a one-frame derivative
+     * kick when gains are changed while the task is running. */
+    context->left_integral_milli = 0;
+    context->right_integral_milli = 0;
+    context->left_previous_error =
+        context->target_left_rpm - context->measured_left_rpm;
+    context->right_previous_error =
+        context->target_right_rpm - context->measured_right_rpm;
+    return true;
+}
+
+void TB6612_MotorBoardGetSpeedLoopStatus(
+    const TB6612MotorBoardContext *context,
+    TB6612SpeedLoopStatus *status)
+{
+    if (status == 0) {
+        return;
+    }
+    *status = (TB6612SpeedLoopStatus){0};
+    if (context == 0) {
+        return;
+    }
+    status->enabled = context->speed_loop_enabled;
+    status->target_left_rpm = context->target_left_rpm;
+    status->target_right_rpm = context->target_right_rpm;
+    status->measured_left_rpm = context->measured_left_rpm;
+    status->measured_right_rpm = context->measured_right_rpm;
+    status->left_delta_count = context->left_delta_count;
+    status->right_delta_count = context->right_delta_count;
+    status->left_output_percent = TB6612_GetLeftCommand();
+    status->right_output_percent = TB6612_GetRightCommand();
+    status->update_count = context->update_count;
+    status->sample_elapsed_ms = context->last_sample_elapsed_ms;
+}
+
+void TB6612_MotorBoardService(TB6612MotorBoardContext *context)
+{
+    uint32_t now_ms;
+    uint32_t elapsed_ms;
+
+    if ((context == 0) || !context->speed_loop_enabled ||
+        (context->now_ms == 0) ||
+        ((context->target_left_rpm == 0) &&
+         (context->target_right_rpm == 0))) {
+        return;
+    }
+
+    now_ms = context->now_ms(context->now_context);
+    if (!context->encoder_sample_ready) {
+        /* A real elapsed interval is required before the first RPM sample. */
+        context->previous_left_count = Encoder_GetLeftCount();
+        context->previous_right_count = Encoder_GetRightCount();
+        context->previous_control_ms = now_ms;
+        context->encoder_sample_ready = true;
+        return;
+    }
+
+    elapsed_ms = (uint32_t)(now_ms - context->previous_control_ms);
+    if (elapsed_ms >= context->speed_loop.control_period_ms) {
+        update_speed_loop(context, now_ms, elapsed_ms);
+    }
 }
 
 bool TB6612_MotorBoard_SetWheelSpeeds(int16_t left,
@@ -162,6 +456,32 @@ bool TB6612_MotorBoard_SetWheelSpeeds(int16_t left,
     TB6612MotorBoardContext *adapter = (TB6612MotorBoardContext *)context;
     int16_t scale = (adapter == 0) ? 350 :
                     adapter->speed_units_at_max_duty;
+
+    if ((adapter != 0) && adapter->speed_loop_enabled) {
+        int32_t old_left_target = adapter->target_left_rpm;
+        int32_t old_right_target = adapter->target_right_rpm;
+
+        if ((left == 0) && (right == 0)) {
+            reset_speed_loop_state(adapter);
+            TB6612_Stop();
+            return true;
+        }
+        adapter->target_left_rpm = speed_to_rpm(adapter, left);
+        adapter->target_right_rpm = speed_to_rpm(adapter, right);
+        if (((old_left_target < 0) != (adapter->target_left_rpm < 0)) ||
+            ((old_left_target == 0) != (adapter->target_left_rpm == 0))) {
+            adapter->left_integral_milli = 0;
+            adapter->left_previous_error = 0;
+        }
+        if (((old_right_target < 0) != (adapter->target_right_rpm < 0)) ||
+            ((old_right_target == 0) != (adapter->target_right_rpm == 0))) {
+            adapter->right_integral_milli = 0;
+            adapter->right_previous_error = 0;
+        }
+
+        TB6612_MotorBoardService(adapter);
+        return true;
+    }
 
     TB6612_SetMotors(units_to_percent(left, scale),
                      units_to_percent(right, scale));

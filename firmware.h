@@ -34,8 +34,20 @@ typedef enum {
     CAR_BUTTON_ACTION_NONE = 0,
     CAR_BUTTON_ACTION_ARM_OK,
     CAR_BUTTON_ACTION_ARM_REJECTED,
+    CAR_BUTTON_ACTION_GRAY_REQUIRED,
     CAR_BUTTON_ACTION_EMERGENCY_STOP
 } CarButtonAction;
+
+typedef enum {
+    CAR_GRAY_CAL_WAIT_WHITE = 0,
+    CAR_GRAY_CAL_CAPTURE_WHITE,
+    CAR_GRAY_CAL_WAIT_BLACK,
+    CAR_GRAY_CAL_CAPTURE_BLACK,
+    CAR_GRAY_CAL_READY,
+    CAR_GRAY_CAL_ERROR
+} CarGrayCalibrationState;
+
+#define CAR_GRAY_CALIBRATION_FRAMES (16U)
 
 typedef struct {
     CarConfig car;
@@ -45,6 +57,10 @@ typedef struct {
     GrayArrayPort gray;
     ButtonReadFn button_read;
     void *button_context;
+    /* KEY3 常驻灰度重标定入口；require=true 时每次上电必须先完成白/黑采样。 */
+    ButtonReadFn gray_cal_button_read;
+    void *gray_cal_button_context;
+    bool require_runtime_gray_calibration;
     BuzzerSetFn buzzer_set;
     void *buzzer_context;
 
@@ -74,6 +90,7 @@ typedef struct {
     Icm42688 imu;
     GrayArray gray;
     Button button;
+    Button gray_cal_button;
     Buzzer buzzer;
     CarYawEstimator yaw;
     CarApp app;
@@ -101,7 +118,16 @@ typedef struct {
     bool last_button_imu_valid;
     bool last_button_motor_armed;
     bool encoder_valid_current;
+    CarGrayCalibrationState gray_cal_state;
+    uint32_t gray_cal_sum[GRAY_ARRAY_CHANNELS];
+    uint16_t gray_cal_white[GRAY_ARRAY_CHANNELS];
+    uint16_t gray_cal_black[GRAY_ARRAY_CHANNELS];
+    uint8_t gray_cal_frame_count;
+    uint8_t gray_cal_bad_channel;
+    int16_t gray_cal_bad_span;
     bool initialized;
+
+
 } CarFirmware;
 
 CarStatus CarFirmware_Init(CarFirmware *firmware,

@@ -14,6 +14,8 @@ typedef struct {
     uint16_t calibration_count;
     uint32_t previous_timestamp_ms;
     uint32_t max_step_ms;
+    uint32_t delayed_step_count;
+    uint32_t rejected_step_count;
     /* Fixed-bias mode is retained for repeatable bench tests. */
     bool fixed_bias;
     bool calibrated;

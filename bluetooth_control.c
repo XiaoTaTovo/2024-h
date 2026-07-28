@@ -157,7 +157,7 @@ static void apply_open_loop(
     gTargetRightRpm      = 0;
     gLastMotionCommandMs = nowMs;
     reset_controller_state();
-    TB6612_SetMotors(left, right);
+    TB6612_SetMotors(left, right);//这个函数设置的是占空比
 }
 
 static char *next_token(char **cursor)

@@ -30,6 +30,7 @@ bool CarYawEstimator_Update(CarYawEstimator *estimator,
                             uint32_t timestamp_ms)
 {
     uint32_t delta_ms;
+    uint32_t reject_step_ms;
 
     if (estimator == 0) {
         return false;
@@ -57,7 +58,21 @@ bool CarYawEstimator_Update(CarYawEstimator *estimator,
 
     delta_ms = (uint32_t)(timestamp_ms - estimator->previous_timestamp_ms);
     estimator->previous_timestamp_ms = timestamp_ms;
-    if ((delta_ms == 0U) || (delta_ms > estimator->max_step_ms)) {
+    if (delta_ms == 0U) {
+        return false;
+    }
+    /* UI and telemetry must not erase real rotation. max_step_ms now marks a
+     * delayed sample for diagnostics; only a true long outage is rejected. */
+    if ((estimator->max_step_ms > 0U) &&
+        (delta_ms > estimator->max_step_ms)) {
+        estimator->delayed_step_count++;
+    }
+    reject_step_ms = estimator->max_step_ms * 10U;
+    if (reject_step_ms < 200U) {
+        reject_step_ms = 200U;
+    }
+    if (delta_ms > reject_step_ms) {
+        estimator->rejected_step_count++;
         return false;
     }
     estimator->yaw_deg += (gyro_z_dps - estimator->bias_dps) *

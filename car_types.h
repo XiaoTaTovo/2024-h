@@ -63,7 +63,9 @@ enum {
     CAR_FAULT_ROUTE_INVALID = 1U << 5,//路径无效
     CAR_FAULT_MOTOR_IO = 1U << 6,//电机IO
     CAR_FAULT_IMU_INIT = 1U << 7,//IMU初始化失败
-    CAR_FAULT_GRAY_NOT_CALIBRATED = 1U << 8//灰度未标定
+    CAR_FAULT_GRAY_NOT_CALIBRATED = 1U << 8,//灰度未标定
+    /* H2026 required-line segments stop instead of turning on odometry alone. */
+    CAR_FAULT_LINE_MISSED = 1U << 9
 };//故障码的含义，对应字段是F
 
 typedef struct {

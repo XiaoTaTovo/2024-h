@@ -1,5 +1,104 @@
 #include "firmware.h"
 
+static bool CarFirmware_GrayCalibrationReady(const CarFirmware *firmware)
+{
+    return !firmware->config.require_runtime_gray_calibration ||
+           (firmware->gray_cal_state == CAR_GRAY_CAL_READY);
+}
+
+static void CarFirmware_BeginGrayCapture(CarFirmware *firmware,
+                                         CarGrayCalibrationState state)
+{
+    for (uint8_t i = 0U; i < GRAY_ARRAY_CHANNELS; i++) {
+        firmware->gray_cal_sum[i] = 0U;
+    }
+    firmware->gray_cal_frame_count = 0U;
+    firmware->gray_cal_state = state;
+}
+
+static void CarFirmware_HandleGrayCalibrationButton(CarFirmware *firmware,
+                                                     uint32_t now_ms)
+{
+    if (!Button_TakePressedEvent(&firmware->gray_cal_button)) {
+        return;
+    }
+
+    /* 运行中禁止改动标定，防止误按 KEY3 瞬间改变循迹输入。 */
+    if (firmware->app.executor.running) {
+        Buzzer_PlayCue(&firmware->buzzer, CAR_CUE_FAULT, now_ms);
+        return;
+    }
+
+    if (firmware->gray_cal_state == CAR_GRAY_CAL_WAIT_BLACK) {
+        CarFirmware_BeginGrayCapture(firmware,
+                                     CAR_GRAY_CAL_CAPTURE_BLACK);
+    } else if ((firmware->gray_cal_state != CAR_GRAY_CAL_CAPTURE_WHITE) &&
+               (firmware->gray_cal_state != CAR_GRAY_CAL_CAPTURE_BLACK)) {
+        /* READY/ERROR 状态再次按 KEY3，也从白场开始一轮全新标定。 */
+        CarFirmware_BeginGrayCapture(firmware,
+                                     CAR_GRAY_CAL_CAPTURE_WHITE);
+    }
+}
+
+static void CarFirmware_AccumulateGrayCalibration(CarFirmware *firmware,
+                                                   uint32_t now_ms)
+{
+    uint16_t *target;
+
+    if ((firmware->gray_cal_state != CAR_GRAY_CAL_CAPTURE_WHITE) &&
+        (firmware->gray_cal_state != CAR_GRAY_CAL_CAPTURE_BLACK)) {
+        return;
+    }
+
+    for (uint8_t i = 0U; i < GRAY_ARRAY_CHANNELS; i++) {
+        firmware->gray_cal_sum[i] += firmware->gray.raw[i];
+    }
+    firmware->gray_cal_frame_count++;
+    if (firmware->gray_cal_frame_count < CAR_GRAY_CALIBRATION_FRAMES) {
+        return;
+    }
+
+    target = (firmware->gray_cal_state == CAR_GRAY_CAL_CAPTURE_WHITE) ?
+        firmware->gray_cal_white : firmware->gray_cal_black;
+    for (uint8_t i = 0U; i < GRAY_ARRAY_CHANNELS; i++) {
+        target[i] = (uint16_t)(firmware->gray_cal_sum[i] /
+                              CAR_GRAY_CALIBRATION_FRAMES);
+    }
+
+    if (firmware->gray_cal_state == CAR_GRAY_CAL_CAPTURE_WHITE) {
+        firmware->gray_cal_state = CAR_GRAY_CAL_WAIT_BLACK;
+        return;
+    }
+
+    if (GrayArray_SetCalibration(&firmware->gray,
+                                 firmware->gray_cal_black,
+                                 firmware->gray_cal_white)) {
+        for (uint8_t i = 0U; i < GRAY_ARRAY_CHANNELS; i++) {
+            firmware->config.gray_black[i] = firmware->gray_cal_black[i];
+            firmware->config.gray_white[i] = firmware->gray_cal_white[i];
+        }
+        firmware->config.gray_calibration_valid = true;
+        firmware->gray_sample.valid = false;
+        firmware->gray_cal_state = CAR_GRAY_CAL_READY;
+        Buzzer_PlayCue(&firmware->buzzer, CAR_CUE_CHECKPOINT, now_ms);
+        return;
+    }
+
+    firmware->gray_cal_bad_channel = 0U;
+    firmware->gray_cal_bad_span = 0;
+    for (uint8_t i = 0U; i < GRAY_ARRAY_CHANNELS; i++) {
+        int32_t span = (int32_t)firmware->gray_cal_white[i] -
+                       (int32_t)firmware->gray_cal_black[i];
+        if ((span > -20) && (span < 20)) {
+            firmware->gray_cal_bad_channel = i;
+            firmware->gray_cal_bad_span = (int16_t)span;
+            break;
+        }
+    }
+    firmware->gray_cal_state = CAR_GRAY_CAL_ERROR;
+    Buzzer_PlayCue(&firmware->buzzer, CAR_CUE_FAULT, now_ms);
+}
+
 static float CarFirmware_SelectGyro(const CarFirmware *firmware,
                                     const Icm42688Sample *sample)
 {
@@ -177,14 +276,21 @@ static void CarFirmware_ApplyOutput(CarFirmware *firmware, uint32_t now_ms)
 static void CarFirmware_RunImu(CarFirmware *firmware, uint32_t now_ms)
 {
     Icm42688Sample raw = {0};
+    float gyro_dps;
 
     if (!Icm42688_ReadSample(&firmware->imu, now_ms, &raw)) {
         firmware->imu_sample.valid = false;
         return;
     }
+    gyro_dps = CarFirmware_SelectGyro(firmware, &raw);
     (void)CarYawEstimator_Update(
-        &firmware->yaw, CarFirmware_SelectGyro(firmware, &raw), now_ms);
-    (void)CarYawEstimator_GetSample(&firmware->yaw, &firmware->imu_sample);
+        &firmware->yaw, gyro_dps, now_ms);
+    if (CarYawEstimator_GetSample(&firmware->yaw,
+                                  &firmware->imu_sample)) {
+        /* Keep the bias-corrected rate observable; yaw alone can hide a stale
+         * or mechanically detached IMU during an arc-to-straight handoff. */
+        firmware->imu_sample.yaw_rate_dps = gyro_dps - firmware->yaw.bias_dps;
+    }
 }
 
 static void CarFirmware_RunControl(CarFirmware *firmware, uint32_t now_ms)
@@ -212,14 +318,22 @@ static void CarFirmware_RunControl(CarFirmware *firmware, uint32_t now_ms)
         input.emergency_stop = true;
         firmware->last_button_action = CAR_BUTTON_ACTION_EMERGENCY_STOP;
     } else if (start_event && !firmware->app.armed) {
-        CarYawEstimator_ResetYaw(&firmware->yaw, 0.0f);
-        input.imu.yaw_deg = 0.0f;
-        firmware->last_arm_status = CarApp_Arm(
-            &firmware->app, firmware->config.mode, now_ms, &input);
-        if (firmware->last_arm_status != CAR_OK) {
-            firmware->last_button_action = CAR_BUTTON_ACTION_ARM_REJECTED;
+        if (!CarFirmware_GrayCalibrationReady(firmware)) {
+            firmware->last_arm_status = CAR_ERROR_STATE;
+            firmware->last_button_action = CAR_BUTTON_ACTION_GRAY_REQUIRED;
             Buzzer_PlayCue(&firmware->buzzer, CAR_CUE_FAULT, now_ms);
         } else {
+            CarYawEstimator_ResetYaw(&firmware->yaw, 0.0f);
+            input.imu.yaw_deg = 0.0f;
+            firmware->last_arm_status = CarApp_Arm(
+                &firmware->app, firmware->config.mode, now_ms, &input);
+        }
+        if ((firmware->last_arm_status != CAR_OK) &&
+            (firmware->last_button_action !=
+             CAR_BUTTON_ACTION_GRAY_REQUIRED)) {
+            firmware->last_button_action = CAR_BUTTON_ACTION_ARM_REJECTED;
+            Buzzer_PlayCue(&firmware->buzzer, CAR_CUE_FAULT, now_ms);
+        } else if (firmware->last_arm_status == CAR_OK) {
             firmware->last_button_action = CAR_BUTTON_ACTION_ARM_OK;
         }
     }
@@ -253,6 +367,11 @@ CarStatus CarFirmware_Init(CarFirmware *firmware,
     Button_Init(&firmware->button, config->button_read,
                 config->button_context, config->button_active_low,
                 config->button_debounce_ms);
+    Button_Init(&firmware->gray_cal_button,
+                config->gray_cal_button_read,
+                config->gray_cal_button_context,
+                config->button_active_low,
+                config->button_debounce_ms);
     Buzzer_Init(&firmware->buzzer, config->buzzer_set,
                 config->buzzer_context);
     CarYawEstimator_Init(&firmware->yaw,
@@ -267,15 +386,28 @@ CarStatus CarFirmware_Init(CarFirmware *firmware,
     if (!Icm42688_Initialize(&firmware->imu)) {
         firmware->hardware_faults |= CAR_FAULT_IMU_INIT;
     }
-    if ((!config->gray_calibration_valid ||
-         !GrayArray_SetCalibration(&firmware->gray,
-                                   config->gray_black,
-                                   config->gray_white)) &&
-        ((config->mode == H2024_MODE_ITEM_2) ||
-         (config->mode == H2024_MODE_ITEM_3) ||
-         (config->mode == H2024_MODE_ITEM_4))) {
-        firmware->hardware_faults |= CAR_FAULT_GRAY_NOT_CALIBRATED;
+    {
+        bool gray_setup_ok = config->gray_calibration_valid &&
+            GrayArray_SetCalibration(&firmware->gray,
+                                     config->gray_black,
+                                     config->gray_white);
+
+        if (!gray_setup_ok && !config->require_runtime_gray_calibration &&
+            ((config->mode == H2024_MODE_ITEM_2) ||
+             (config->mode == H2024_MODE_ITEM_3) ||
+             (config->mode == H2024_MODE_ITEM_4) ||
+             /* 2026 路线都用灰度识别节点/弧线，未标定时禁止启动。 */
+             (config->mode == H2026_MODE_ITEM_1) ||
+             (config->mode == H2026_MODE_ITEM_2) ||
+             (config->mode == H2026_MODE_ITEM_3) ||
+             (config->mode == H2026_MODE_ITEM_4))) {
+            firmware->hardware_faults |= CAR_FAULT_GRAY_NOT_CALIBRATED;
+        }
     }
+    firmware->gray_cal_state =
+        (config->require_runtime_gray_calibration &&
+         (config->gray_cal_button_read != 0)) ?
+        CAR_GRAY_CAL_WAIT_WHITE : CAR_GRAY_CAL_READY;
 
     CarPeriodicTask_Init(&firmware->imu_task, 5U, now_ms);
     CarPeriodicTask_Init(&firmware->gray_task, 10U, now_ms);
@@ -307,14 +439,20 @@ void CarFirmware_Tick(CarFirmware *firmware, uint32_t now_ms)
     }
     (void)CarFirmware_StepMotorPrepare(firmware, now_ms);
     Button_Update(&firmware->button, now_ms);
+    Button_Update(&firmware->gray_cal_button, now_ms);
     Buzzer_Update(&firmware->buzzer, now_ms);
+    CarFirmware_HandleGrayCalibrationButton(firmware, now_ms);
 
     if (CarPeriodicTask_Due(&firmware->imu_task, now_ms)) {
         CarFirmware_RunImu(firmware, now_ms);
     }
     if (CarPeriodicTask_Due(&firmware->gray_task, now_ms)) {
         if (GrayArray_Read(&firmware->gray, now_ms)) {
-            (void)GrayArray_GetLatest(&firmware->gray, &firmware->gray_sample);
+            CarFirmware_AccumulateGrayCalibration(firmware, now_ms);
+            if (!GrayArray_GetLatest(&firmware->gray,
+                                     &firmware->gray_sample)) {
+                firmware->gray_sample.valid = false;
+            }
         }
     }
     if (CarPeriodicTask_Due(&firmware->control_task, now_ms)) {
