@@ -1,4 +1,32 @@
-# TB6612-1 开环双轮测试工程
+# MSPM0G3507 小车综合工程
+
+## 当前默认模式：灰度 ADC 调试
+
+`project_mode.h` 当前选择 `PROJECT_MODE_GRAY_ADC_DEBUG`。该模式保持电机输出关闭，
+依次选择 8 路灰度传感器并在 OLED 上显示原始 12 位 ADC 数字。
+
+| 功能 | 引脚 |
+| --- | --- |
+| 灰度 AD0/AD1/AD2 | PA24 / PA25 / PA26 |
+| 灰度 OUT | PA27 / ADC0 channel 0 |
+| 灰度 EN | PB24，低电平使能 |
+| 灰度 ERR | PB25 |
+| OLED SCL/SDA | PA1 / PA0，I2C0，100 kHz |
+
+OLED 优先尝试地址 `0x3C`，地址无应答时再尝试 `0x3D`。最后一行的 `F:n`
+持续增加表示主循环仍在刷新；`ADC OK` 表示本轮 8 路采样全部完成，`ADC ERR`
+表示至少一次 ADC 等待超时。
+
+切换功能时修改 `project_mode.h` 中的 `PROJECT_MODE`：
+
+- `PROJECT_MODE_BLUETOOTH_TUNING`：原 TB6612/蓝牙测试。
+- `PROJECT_MODE_H2024_ITEM_1` 至 `PROJECT_MODE_H2024_ITEM_4`：赛题逻辑。
+- `PROJECT_MODE_GRAY_ADC_DEBUG`：8 路原始 ADC + OLED 调试。
+
+注意：拓展板文档预留的 OLED `PB2/PB3` 当前与 `UART_BLUETOOTH` 冲突。本调试模式
+沿用已上板验证过的 `I2C0 PA0/PA1` 接线，不能把 OLED 同时接到 `PB2/PB3`。
+
+## TB6612-1 开环双轮测试
 
 本工程只测试拓展板上的 `TB6612-1`。当前没有编码器测速，也没有 PID；VOFA+ 中显示的是控制命令，不是实际转速。
 

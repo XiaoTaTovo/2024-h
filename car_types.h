@@ -54,17 +54,19 @@ typedef enum {
 } CarCue;
 
 enum {
-    CAR_FAULT_NONE = 0U,
-    CAR_FAULT_EMERGENCY_STOP = 1U << 0,
-    CAR_FAULT_ENCODER_STALE = 1U << 1,
-    CAR_FAULT_IMU_STALE = 1U << 2,
-    CAR_FAULT_GRAY_STALE = 1U << 3,
-    CAR_FAULT_SEGMENT_TIMEOUT = 1U << 4,
-    CAR_FAULT_ROUTE_INVALID = 1U << 5,
-    CAR_FAULT_MOTOR_IO = 1U << 6,
-    CAR_FAULT_IMU_INIT = 1U << 7,
-    CAR_FAULT_GRAY_NOT_CALIBRATED = 1U << 8
-};
+    CAR_FAULT_NONE = 0U,//无故障
+    CAR_FAULT_EMERGENCY_STOP = 1U << 0,//紧急停止
+    CAR_FAULT_ENCODER_STALE = 1U << 1,//编码器超时
+    CAR_FAULT_IMU_STALE = 1U << 2,//IMU超时
+    CAR_FAULT_GRAY_STALE = 1U << 3,//灰度超时
+    CAR_FAULT_SEGMENT_TIMEOUT = 1U << 4,//段超时
+    CAR_FAULT_ROUTE_INVALID = 1U << 5,//路径无效
+    CAR_FAULT_MOTOR_IO = 1U << 6,//电机IO
+    CAR_FAULT_IMU_INIT = 1U << 7,//IMU初始化失败
+    CAR_FAULT_GRAY_NOT_CALIBRATED = 1U << 8,//灰度未标定
+    /* H2026 required-line segments stop instead of turning on odometry alone. */
+    CAR_FAULT_LINE_MISSED = 1U << 9
+};//故障码的含义，对应字段是F
 
 typedef struct {
     CarMotorCommand motor;

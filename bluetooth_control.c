@@ -75,7 +75,7 @@ static void send_text(const char *text)
 static void send_help(void)
 {
     send_text("#HELP commands require CR/LF or 100 ms idle\r\n");
-    send_text("#CAL | STATUS | PPR left [right]\r\n");
+    send_text("#CAL | STATUS | CPR left [right] (PPR alias)\r\n");
     send_text("#OPEN left_pct right_pct | F | B | L | R | S | + | -\r\n");
     send_text("#SPEED left_rpm right_rpm | KEEP | TIMEOUT ms\r\n");
     send_text("#PID kp ki [kd] | KP value | KI value | KD value\r\n");
@@ -157,7 +157,7 @@ static void apply_open_loop(
     gTargetRightRpm      = 0;
     gLastMotionCommandMs = nowMs;
     reset_controller_state();
-    TB6612_SetMotors(left, right);
+    TB6612_SetMotors(left, right);//这个函数设置的是占空比
 }
 
 static char *next_token(char **cursor)
@@ -293,7 +293,7 @@ static bool command_open(char **cursor, uint32_t nowMs)
     return true;
 }
 
-static bool command_ppr(char **cursor)
+static bool command_cpr(char **cursor)
 {
     char *leftText = next_token(cursor);
     char *rightText = next_token(cursor);
@@ -301,26 +301,26 @@ static bool command_ppr(char **cursor)
     int32_t right;
 
     if ((leftText == NULL) || !parse_int32(leftText, &left)) {
-        report_command_error("PPR needs one or two positive counts");
+        report_command_error("CPR needs one or two positive counts");
         return false;
     }
     if (rightText == NULL) {
         right = left;
     } else if (!parse_int32(rightText, &right)) {
-        report_command_error("PPR needs one or two positive counts");
+        report_command_error("CPR needs one or two positive counts");
         return false;
     }
     if (!has_no_more_tokens(cursor) || (left <= 0) || (right <= 0) ||
         ((uint32_t) left > SPEED_MAX_COUNTS_PER_REV) ||
         ((uint32_t) right > SPEED_MAX_COUNTS_PER_REV)) {
-        report_command_error("PPR range is 1..1000000");
+        report_command_error("CPR range is 1..1000000");
         return false;
     }
 
     gLeftCountsPerRev  = (uint32_t) left;
     gRightCountsPerRev = (uint32_t) right;
     gSpeedFilterReady  = false;
-    send_text("#OK PPR\r\n");
+    send_text("#OK CPR\r\n");
     return true;
 }
 
@@ -523,8 +523,8 @@ static bool execute_command(uint32_t nowMs)
         }
         return true;
     }
-    if (strcmp(command, "PPR") == 0) {
-        return command_ppr(&cursor);
+    if ((strcmp(command, "CPR") == 0) || (strcmp(command, "PPR") == 0)) {
+        return command_cpr(&cursor);
     }
     if (strcmp(command, "PID") == 0) {
         return command_pid(&cursor);
